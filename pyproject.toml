@@ -1,9 +1,7 @@
 [project]
 name = "roughly"
 version = "0.1.0"
-description = "Add your description here"
+description = "A Roughtime client library for Python"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "cryptography>=46.0.3",
-]
+dependencies = ["cryptography>=46.0.3"]
