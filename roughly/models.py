@@ -11,11 +11,19 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from roughly import tags
 
+SENTINEL = object()
+
 ROUGHTIM = 0x4D49544847554F52
 RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
+DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
-VERSIONS_SUPPORTED = (1, 0x8000000C)
+
+def build_supported_versions(ranged: range) -> tuple[int, ...]:
+    versions =  (1,) + tuple(0x80000000 | v for v in ranged)
+    return tuple(sorted(versions))
+
+VERSIONS_SUPPORTED = build_supported_versions(range(8, 15))
 
 
 def build_request(
@@ -37,7 +45,6 @@ def build_request(
 
     message = Message(tags=tag_list)
     message.prepare()
-    message.debug_print()
     return Packet(message=message)
 
 
@@ -50,7 +57,7 @@ class LoadedTag:
 @dataclass
 class Tag:
     tag: int  # uint32
-    value: bytes  # uint32, bytes, or nested Message
+    value: bytes
 
 
 @dataclass
@@ -176,11 +183,27 @@ class Packet:
 
 
 def pop_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> Tag:
+    result = find_by_predicate(tag_list, predicate)
+    if result is not None:
+        return tag_list.pop(result)
+    raise ValueError("No tag found matching predicate")
+
+def pop_by_predicate_optional(
+    tag_list: list[Tag], predicate: Callable[[Tag], bool]
+) -> Tag | None:
+    result = find_by_predicate(tag_list, predicate)
+    if result is not None:
+        return tag_list.pop(result)
+    return None
+
+def find_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> int | None:
     for i, tag in enumerate(tag_list):
         if predicate(tag):
-            return tag_list.pop(i)
-    raise ValueError("Tag not found matching predicate")
+            return i
+    return None
 
+def split_into_chunks(data: bytes, chunk_size: int) -> list[bytes]:
+    return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
 
 @dataclass
 class SignedResponse:
@@ -196,12 +219,14 @@ class SignedResponse:
         message = Message.load(data)
         radius_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.RADI)
         midpoint_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.MIDP)
-        version_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.VERS)
+        version_tag = pop_by_predicate_optional(
+            message.tags, lambda t: t.tag == tags.VERS
+        )
         root_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.ROOT)
 
         (radius,) = struct.unpack("<I", radius_tag.value)
         (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
-        version = struct.unpack(f"<{len(version_tag.value) // 4}I", version_tag.value)
+        version = struct.unpack(f"<{len(version_tag.value) // 4}I", version_tag.value) if version_tag else ()
         root = root_tag.value
 
         return cls(
@@ -221,7 +246,6 @@ class Delegation:
 class Certificate:
     delegation: Delegation
     signature: bytes
-    ...
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Certificate:
@@ -271,10 +295,10 @@ class Response:
     nonce: bytes
     """The nonce used in the request/response"""
 
-    type: int
+    type: int | None
     """The type of the response (should be TYPE_RESPONSE)"""
 
-    path: tuple[int, ...]
+    path: list[bytes]
     """The PATH tag value from the response. Used for the Merkle tree."""
 
     signed_response: SignedResponse
@@ -286,6 +310,18 @@ class Response:
     index: int
     """The index of the server in the Merkle tree."""
 
+    @property
+    def version(self) -> int:
+        """The version of the response"""
+        if not self.signed_response.version:
+            result = find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.VER)
+            if result is None:
+                raise ValueError("No VER tag found in response")
+            version, = struct.unpack("<I", self.packet.message.tags[result].value[:4])
+            return version
+
+        return self.signed_response.version[0]
+
     @classmethod
     def from_packet(cls, *, raw: bytes, request: bytes) -> Response:
         p = Packet.load(raw)
@@ -293,7 +329,11 @@ class Response:
         tag_list = p.message.tags.copy()
         sig = pop_by_predicate(tag_list, lambda t: t.tag == tags.SIG)
         nonc = pop_by_predicate(tag_list, lambda t: t.tag == tags.NONC)
-        type = pop_by_predicate(tag_list, lambda t: t.tag == tags.TYPE)
+
+        type = pop_by_predicate_optional(tag_list, lambda t: t.tag == tags.TYPE)
+        if type is not None:
+            type = struct.unpack("<I", type.value)[0]
+
         path = pop_by_predicate(tag_list, lambda t: t.tag == tags.PATH)
         srep = pop_by_predicate(tag_list, lambda t: t.tag == tags.SREP)
         cert = pop_by_predicate(tag_list, lambda t: t.tag == tags.CERT)
@@ -304,26 +344,35 @@ class Response:
             packet=p,
             signature=sig.value,
             nonce=nonc.value,
-            type=struct.unpack("<I", type.value)[0],
-            path=struct.unpack(f"<{len(path.value) // 4}I", path.value),
+            type=type,
+            path=split_into_chunks(path.value, 4),
             signed_response=SignedResponse.from_bytes(srep.value),
             certificate=Certificate.from_bytes(cert.value),
             index=struct.unpack("<I", indx.value)[0],
         )
 
     def _verify_merkle(self) -> bool:
-        h = partial_sha512(b"\x00" + self.request)
+        if self.version >= 0x80000000 + 12:
+            h = partial_sha512(b"\x00" + self.request)
+        else:
+            h = partial_sha512(b"\x00" + self.nonce)
+
 
         for i, node in enumerate(self.path):
-            node_bytes = struct.pack("<I", node)
             if (self.index >> i) & 1 == 0:
-                h = partial_sha512(b"\x01" + node_bytes + h)
+                h = partial_sha512(b"\x01" + node + h)
             else:
-                h = partial_sha512(b"\x01" + h + node_bytes)
+                h = partial_sha512(b"\x01" + h + node)
 
         return h == self.signed_response.root
 
     def verify(self, long_term_public_key_bytes: bytes) -> bool:
+        delegation_context_string = DELEGATION_CONTEXT_STRING_OLD
+
+        # the context string got changed in draft-12
+        if self.version >= 0x80000000 + 12:
+            delegation_context_string = DELEGATION_CONTEXT_STRING
+
         # 5.4. Validity of Response
 
         # The signature in CERT was made with the long-term key of the server.
@@ -332,7 +381,7 @@ class Response:
         )
         long_term_public_key.verify(
             self.certificate.signature,
-            DELEGATION_CONTEXT_STRING + self.certificate.delegation.raw,
+            delegation_context_string + self.certificate.delegation.raw,
         )
 
         # The MIDP timestamp lies in the interval specified by the MINT and MAXT timestamps.
