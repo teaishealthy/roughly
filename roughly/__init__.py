@@ -20,14 +20,17 @@ DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
 RoughtimeErrorReason = Literal["merkle", "key-age", "signature-certificate", "signature-response"]
 
-class RoughtimeError(Exception): ...
+class RoughtimeError(Exception):
+    """Represents a generic Roughtime error."""
 
+class PacketError(RoughtimeError):
+    """Represents an error in packet parsing"""
 
-class PacketError(RoughtimeError): ...
-
-class FormatError(RoughtimeError): ...
+class FormatError(RoughtimeError):
+    """Represents an error in packet formatting"""
 
 class VerificationError(RoughtimeError):
+    """Represents an error in response verification"""
     def __init__(self, message: str, *, reason: RoughtimeErrorReason):
         super().__init__(message)
         self.reason: RoughtimeErrorReason = reason
@@ -377,7 +380,7 @@ class Response:
     """The nonce used in the request/response"""
 
     type: int | None
-    """The type of the response (should be TYPE_RESPONSE)"""
+    """The type of the response (should be TYPE_RESPONSE). May be None for < draft-14."""
 
     path: list[bytes]
     """The PATH tag value from the response. Used for the Merkle tree."""
@@ -415,7 +418,10 @@ class Response:
 
         type = pop_by_predicate_optional(tag_list, lambda t: t.tag == tags.TYPE)
         if type is not None:
-            type = struct.unpack("<I", type.value)[0]
+            type, = struct.unpack("<I", type.value)
+
+            if type != tags.TYPE_RESPONSE:
+                raise PacketError(f"Expected TYPE_RESPONSE, got {type}")
 
         path = pop_by_predicate(tag_list, lambda t: t.tag == tags.PATH)
         srep = pop_by_predicate(tag_list, lambda t: t.tag == tags.SREP)
