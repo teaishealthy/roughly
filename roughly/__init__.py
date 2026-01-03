@@ -23,7 +23,7 @@ def build_supported_versions(ranged: range) -> tuple[int, ...]:
     return tuple(sorted(versions))
 
 
-VERSIONS_SUPPORTED = build_supported_versions(range(8, 15))
+VERSIONS_SUPPORTED = build_supported_versions(range(7, 15))
 
 
 class QueueDatagramProtocol(asyncio.DatagramProtocol):
@@ -407,7 +407,7 @@ class Response:
         cert = pop_by_predicate(tag_list, lambda t: t.tag == tags.CERT)
         indx = pop_by_predicate(tag_list, lambda t: t.tag == tags.INDX)
 
-        return cls(
+        response = cls(
             request=request,
             packet=p,
             signature=sig.value,
@@ -418,6 +418,11 @@ class Response:
             certificate=Certificate.from_bytes(cert.value),
             index=struct.unpack("<I", indx.value)[0],
         )
+
+        if response.version >= 0x80000000 + 14 and type is None:
+            raise ValueError("TYPE tag is required for draft-14 and later")
+
+        return response
 
     def _verify_merkle(self) -> bool:
         if self.version >= 0x80000000 + 12:
