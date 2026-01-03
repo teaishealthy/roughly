@@ -5,8 +5,9 @@ import io
 import os
 import struct
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Literal
 
+import cryptography.exceptions
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
@@ -16,6 +17,20 @@ ROUGHTIM = 0x4D49544847554F52
 RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
+
+RoughtimeErrorReason = Literal["merkle", "key-age", "signature-certificate", "signature-response"]
+
+class RoughtimeError(Exception): ...
+
+
+class PacketError(RoughtimeError): ...
+
+class FormatError(RoughtimeError): ...
+
+class VerificationError(RoughtimeError):
+    def __init__(self, message: str, *, reason: RoughtimeErrorReason):
+        super().__init__(message)
+        self.reason: RoughtimeErrorReason = reason
 
 
 def build_supported_versions(ranged: range) -> tuple[int, ...]:
@@ -46,7 +61,7 @@ class QueueDatagramProtocol(asyncio.DatagramProtocol):
     def connection_lost(self, exc: Exception | None):
         if exc:
             self.queue.put_nowait(exc)
-        self.queue.put_nowait(RuntimeError("Connection closed"))
+        self.queue.put_nowait(RoughtimeError("Connection closed unexpectedly"))
 
     async def recv(self) -> bytes:
         item = await self.queue.get()
@@ -74,8 +89,8 @@ async def send_request(host: str, port: int, public_key: bytes) -> Response:
 
         data = await protocol.recv()
         response = Response.from_packet(raw=data, request=payload)
-        if not response.verify(public_key):
-            raise ValueError("Response verification failed")
+
+        response.verify(public_key)
     finally:
         transport.close()
 
@@ -129,7 +144,7 @@ class Message:
     def dump(self) -> bytes:
         num_pairs = len(self.tags)
         if num_pairs == 0:
-            raise ValueError("Message must contain at least one tag")
+            raise FormatError("Message must contain at least one tag")
 
         value_blobs: list[bytes] = []
         for tag in self.tags:
@@ -140,10 +155,10 @@ class Message:
             elif isinstance(tag.value, Message):
                 val_data = tag.value.dump()
             else:
-                raise TypeError("Unsupported tag value type")
+                raise FormatError("Unsupported tag value type")
 
             if len(val_data) % 4 != 0:
-                raise ValueError(
+                raise FormatError(
                     f"Value for tag {tag.tag:#x} is not 4-byte aligned (len={len(val_data)})"
                 )
 
@@ -185,7 +200,7 @@ class Message:
         reader = io.BytesIO(data)
         (num_pairs,) = struct.unpack("<I", reader.read(4))
         if num_pairs == 0:
-            raise ValueError("Message must contain at least one tag")
+            raise PacketError("Message contains zero tag-value pairs")
 
         offsets = [0]
 
@@ -228,10 +243,10 @@ class Packet:
     def load(cls, data: bytes) -> Packet:
         magic, msg_len = struct.unpack("<QI", data[:12])
         if magic != cls.magic:
-            raise ValueError(f"Invalid magic number: {magic:#x}")
+            raise PacketError(f"Expected magic {cls.magic:#x}, got {magic:#x}")
 
         if len(data) < 12 + msg_len:
-            raise ValueError("Data too short for declared message length")
+            raise PacketError("Packet data is shorter than declared message length")
 
         msg_data = data[12 : 12 + msg_len]
         message = Message.load(msg_data)
@@ -242,7 +257,7 @@ def pop_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> T
     result = find_by_predicate(tag_list, predicate)
     if result is not None:
         return tag_list.pop(result)
-    raise ValueError("No tag found matching predicate")
+    raise RoughtimeError("Tag not found matching predicate")
 
 
 def pop_by_predicate_optional(
@@ -384,7 +399,7 @@ class Response:
                 self.packet.message.tags, lambda t: t.tag == tags.VER
             )
             if result is None:
-                raise ValueError("No VER tag found in response")
+                raise PacketError("No VER tag found in response packet")
             (version,) = struct.unpack("<I", self.packet.message.tags[result].value[:4])
             return version
 
@@ -420,7 +435,7 @@ class Response:
         )
 
         if response.version >= 0x80000000 + 14 and type is None:
-            raise ValueError("TYPE tag is required for draft-14 and later")
+            raise PacketError("TYPE tag missing in draft-14+ response")
 
         return response
 
@@ -451,10 +466,13 @@ class Response:
         long_term_public_key = ed25519.Ed25519PublicKey.from_public_bytes(
             long_term_public_key_bytes
         )
-        long_term_public_key.verify(
-            self.certificate.signature,
-            delegation_context_string + self.certificate.delegation.raw,
-        )
+        try:
+            long_term_public_key.verify(
+                self.certificate.signature,
+                delegation_context_string + self.certificate.delegation.raw,
+            )
+        except cryptography.exceptions.InvalidSignature:
+            raise VerificationError("Certificate signature invalid", reason="signature-certificate")
 
         # The MIDP timestamp lies in the interval specified by the MINT and MAXT timestamps.
         midp = self.signed_response.midpoint
@@ -463,18 +481,21 @@ class Response:
             <= midp
             <= self.certificate.delegation.max_time
         ):
-            raise ValueError("MIDP timestamp is outside of delegation bounds")
+            raise VerificationError("MIDP timestamp is outside of delegation bounds", reason="key-age")
 
         # The INDX and PATH values prove a hash value derived from the request packet was included in the Merkle tree with value ROOT
         if not self._verify_merkle():
-            raise ValueError("Merkle tree verification failed")
+            raise VerificationError("Merkle tree verification failed", reason="merkle")
 
         # The signature of SREP in SIG validates with the public key in DELE.
         public_key = ed25519.Ed25519PublicKey.from_public_bytes(
             self.certificate.delegation.public_key
         )
-        public_key.verify(
-            self.signature, RESPONSE_CONTEXT_STRING + self.signed_response.raw
-        )
+        try:
+            public_key.verify(
+                self.signature, RESPONSE_CONTEXT_STRING + self.signed_response.raw
+            )
+        except cryptography.exceptions.InvalidSignature:
+            raise VerificationError("Response signature invalid", reason="signature-response")
 
         return True
