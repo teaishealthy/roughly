@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import struct
@@ -11,8 +12,6 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from roughly import tags
 
-SENTINEL = object()
-
 ROUGHTIM = 0x4D49544847554F52
 RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
@@ -20,10 +19,67 @@ DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
 
 def build_supported_versions(ranged: range) -> tuple[int, ...]:
-    versions =  (1,) + tuple(0x80000000 | v for v in ranged)
+    versions = (1,) + tuple(0x80000000 | v for v in ranged)
     return tuple(sorted(versions))
 
+
 VERSIONS_SUPPORTED = build_supported_versions(range(8, 15))
+
+
+class QueueDatagramProtocol(asyncio.DatagramProtocol):
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self.loop = loop
+        self.transport: asyncio.DatagramTransport | None = None
+        self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]] | Exception] = (
+            asyncio.Queue()
+        )
+
+    def connection_made(self, transport: asyncio.DatagramTransport):
+        self.transport = transport
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]):
+        self.queue.put_nowait((data, addr))
+
+    def error_received(self, exc: Exception):
+        self.queue.put_nowait(exc)
+
+    def connection_lost(self, exc: Exception | None):
+        if exc:
+            self.queue.put_nowait(exc)
+        self.queue.put_nowait(RuntimeError("Connection closed"))
+
+    async def recv(self) -> bytes:
+        item = await self.queue.get()
+        if isinstance(item, Exception):
+            raise item
+        return item[0]
+
+
+async def open_udp_socket(host: str, port: int):
+    loop = asyncio.get_running_loop()
+    transport, protocol = await loop.create_datagram_endpoint(
+        lambda: QueueDatagramProtocol(loop),
+        remote_addr=(host, port),
+    )
+    return transport, protocol
+
+
+async def send_request(host: str, port: int, public_key: bytes) -> Response:
+    transport, protocol = await open_udp_socket(host, port)
+
+    try:
+        p = build_request(public_key=public_key)
+        payload = p.dump()
+        transport.sendto(payload)
+
+        data = await protocol.recv()
+        response = Response.from_packet(raw=data, request=payload)
+        if not response.verify(public_key):
+            raise ValueError("Response verification failed")
+    finally:
+        transport.close()
+
+    return response
 
 
 def build_request(
@@ -188,6 +244,7 @@ def pop_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> T
         return tag_list.pop(result)
     raise ValueError("No tag found matching predicate")
 
+
 def pop_by_predicate_optional(
     tag_list: list[Tag], predicate: Callable[[Tag], bool]
 ) -> Tag | None:
@@ -196,14 +253,19 @@ def pop_by_predicate_optional(
         return tag_list.pop(result)
     return None
 
-def find_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> int | None:
+
+def find_by_predicate(
+    tag_list: list[Tag], predicate: Callable[[Tag], bool]
+) -> int | None:
     for i, tag in enumerate(tag_list):
         if predicate(tag):
             return i
     return None
 
+
 def split_into_chunks(data: bytes, chunk_size: int) -> list[bytes]:
     return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
+
 
 @dataclass
 class SignedResponse:
@@ -226,7 +288,11 @@ class SignedResponse:
 
         (radius,) = struct.unpack("<I", radius_tag.value)
         (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
-        version = struct.unpack(f"<{len(version_tag.value) // 4}I", version_tag.value) if version_tag else ()
+        version = (
+            struct.unpack(f"<{len(version_tag.value) // 4}I", version_tag.value)
+            if version_tag
+            else ()
+        )
         root = root_tag.value
 
         return cls(
@@ -314,10 +380,12 @@ class Response:
     def version(self) -> int:
         """The version of the response"""
         if not self.signed_response.version:
-            result = find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.VER)
+            result = find_by_predicate(
+                self.packet.message.tags, lambda t: t.tag == tags.VER
+            )
             if result is None:
                 raise ValueError("No VER tag found in response")
-            version, = struct.unpack("<I", self.packet.message.tags[result].value[:4])
+            (version,) = struct.unpack("<I", self.packet.message.tags[result].value[:4])
             return version
 
         return self.signed_response.version[0]
@@ -356,7 +424,6 @@ class Response:
             h = partial_sha512(b"\x00" + self.request)
         else:
             h = partial_sha512(b"\x00" + self.nonce)
-
 
         for i, node in enumerate(self.path):
             if (self.index >> i) & 1 == 0:
