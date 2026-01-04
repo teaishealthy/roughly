@@ -103,6 +103,7 @@ async def _query_server(
                     host,
                     port,
                     server.public_key,
+                    versions=(server.version,),
                 )
                 return server, response
         except Exception:
@@ -161,6 +162,7 @@ async def query_servers(servers: list[Server]) -> list[tuple[Response, bytes]]:
                         port,
                         server.public_key,
                         nonce=nonce,
+                        versions=(server.version,),
                     )
                     responses.append((response, rand))
 
