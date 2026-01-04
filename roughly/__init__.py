@@ -392,6 +392,12 @@ def partial_sha512(data: bytes) -> bytes:
     return full_hash[:32]
 
 
+def sha512_256(data: bytes) -> bytes:
+    digest = hashes.Hash(hashes.SHA512_256())
+    digest.update(data)
+    return digest.finalize()
+
+
 @dataclass
 class Response:
     raw: bytes
@@ -477,25 +483,30 @@ class Response:
         return response
 
     def _verify_merkle(self) -> bool:
+        hasher = partial_sha512
+        if self.version <= 0x80000000 + 7:
+            hasher = sha512_256
+
         if self.version >= 0x80000000 + 12:
-            h = partial_sha512(b"\x00" + self.request)
+            h = hasher(b"\x00" + self.request)
         else:
-            h = partial_sha512(b"\x00" + self.nonce)
+            h = hasher(b"\x00" + self.nonce)
 
         for i, node in enumerate(self.path):
             if (self.index >> i) & 1 == 0:
-                h = partial_sha512(b"\x01" + node + h)
+                h = hasher(b"\x01" + node + h)
             else:
-                h = partial_sha512(b"\x01" + h + node)
+                h = hasher(b"\x01" + h + node)
 
         return h == self.signed_response.root
 
     def verify(self, long_term_public_key_bytes: bytes) -> bool:
-        delegation_context_string = DELEGATION_CONTEXT_STRING_OLD
+        delegation_context_string = DELEGATION_CONTEXT_STRING
 
-        # the context string got changed in draft-12
-        if self.version >= 0x80000000 + 12:
-            delegation_context_string = DELEGATION_CONTEXT_STRING
+        # what? the context string got changed in draft-8 through draft-11
+        # and then got changed back in draft-12
+        if 0x80000000 + 7 < self.version < 0x80000000 + 12:
+            delegation_context_string = DELEGATION_CONTEXT_STRING_OLD
 
         # 5.4. Validity of Response
 

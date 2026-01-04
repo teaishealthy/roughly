@@ -6,7 +6,7 @@
 An asynchronous client library for the Roughtime protocol for Python.
 
 Implements the Roughtime protocol as described in https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15, aka "IETF-Roughtime".
-Draft versions 08 through 15 are supported.
+Draft versions 07 through 15 are supported.
 
 ## Quickstart
 
@@ -51,7 +51,6 @@ if confirm_malfeasance(report):
 ## Ecosystem
 
 An example ecosystem file can be found at [ecosystem.json](ecosystem.json), I tried my best to include as many servers as I could find.
-Note that I couldn't find the correct public keys for the servers at *.roughtime.netnod.se.
 
 If you know of any other Roughtime servers, run your own server, or have updated public keys for any of the listed servers, please open a PR or an issue!
 
