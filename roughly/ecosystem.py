@@ -9,13 +9,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from roughly import Response, RoughtimeError, partial_sha512, send_request
+from roughly import (
+    Response,
+    RoughtimeError,
+    VerificationError,
+    partial_sha512,
+    send_request,
+)
 
 # Because Cloudflare's ecosystem file uses version strings instead of integers
 VERSION_LOOKUP: dict[str, int] = {
     "IETF-Roughtime": 0x80000000 | 7,
     "Google-Roughtime": 3000600613,
 }
+
+
+class BadReport(RoughtimeError):
+    """Raised when a malfeasance report is invalid."""
 
 
 class MalfeasanceReport(TypedDict):
@@ -220,25 +230,38 @@ def confirm_malfeasance(
     Args:
         report (list[MalfeasanceReport]): The malfeasance report to check.
 
+    Raises:
+        BadReport: If the malfeasance report is invalid.
+
     Returns:
         bool: Whether the malfeasance report indicates inconsistent responses.
     """
-    # TODO: this never checks if the signatures are valid -> server actually made this response
-    # also never checks if the request actually triggered this response
-    # also never checks if the requests have been made in this order
-    # --> we assume a bit too much good faith here
-
     responses: list[tuple[Response, bytes]] = []
+
     for entry in report:
         rand = base64.b64decode(entry["rand"])
         request = base64.b64decode(entry["request"])
         response_bytes = base64.b64decode(entry["response"])
-        _public_key = base64.b64decode(entry["publicKey"])
+        public_key = base64.b64decode(entry["publicKey"])
 
         response = Response.from_packet(
             raw=response_bytes,
             request=request,
         )
+
+        try:
+            response.verify(public_key)
+        except VerificationError as e:
+            raise BadReport("Invalid signature in malfeasance report") from e
+
         responses.append((response, rand))
+
+    for idx, (current_response, current_rand) in enumerate(responses[1:], start=1):
+        previous_response, _ = responses[idx - 1]
+
+        expected_nonce = partial_sha512(previous_response.raw + current_rand)
+
+        if current_response.nonce != expected_nonce:
+            raise BadReport("Invalid nonce chaining in malfeasance report")
 
     return not responses_consistent(responses)
