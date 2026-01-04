@@ -220,7 +220,7 @@ class Message:
         zzzz_tag = Tag(tag=tags.ZZZZ, value=b"")
         self.tags.append(zzzz_tag)
 
-        current_size = len(self.dump())
+        current_size = len(Packet(message=self).dump())
 
         zlen = 1024 - current_size
         zzzz_tag.value = b"\x00" * zlen
