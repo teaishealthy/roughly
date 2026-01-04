@@ -69,3 +69,7 @@ The interopability matrix of `roughly` against Roughtime servers looks like this
 | [roughtimed](https://github.com/dansarie/roughtimed)            | ✅ |
 
 I'm unsure why `roughly` is unable to request time from `roughenough`. I'm looking into this, but if you have any ideas please open an issue!
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
