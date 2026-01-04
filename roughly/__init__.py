@@ -18,30 +18,38 @@ RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
-RoughtimeErrorReason = Literal["merkle", "key-age", "signature-certificate", "signature-response"]
+RoughtimeErrorReason = Literal[
+    "merkle", "key-age", "signature-certificate", "signature-response"
+]
+
 
 class RoughtimeError(Exception):
     """Represents a generic Roughtime error."""
 
+
 class PacketError(RoughtimeError):
     """Represents an error in packet parsing"""
+
 
 class FormatError(RoughtimeError):
     """Represents an error in packet formatting"""
 
+
 class VerificationError(RoughtimeError):
     """Represents an error in response verification"""
+
     def __init__(self, message: str, *, reason: RoughtimeErrorReason):
         super().__init__(message)
         self.reason: RoughtimeErrorReason = reason
 
 
-def build_supported_versions(ranged: range) -> tuple[int, ...]:
-    versions = (1,) + tuple(0x80000000 | v for v in ranged)
+def build_supported_versions(start: int, end: int) -> tuple[int, ...]:
+    # Build a tuple of supported Roughtime versions (inclusive of start and end)
+    versions = (1,) + tuple(0x80000000 | v for v in range(start, end + 1))
     return tuple(sorted(versions))
 
 
-VERSIONS_SUPPORTED = build_supported_versions(range(7, 15))
+VERSIONS_SUPPORTED = build_supported_versions(7, 15)
 
 
 class QueueDatagramProtocol(asyncio.DatagramProtocol):
@@ -82,11 +90,18 @@ async def open_udp_socket(host: str, port: int):
     return transport, protocol
 
 
-async def send_request(host: str, port: int, public_key: bytes) -> Response:
+async def send_request(
+    host: str,
+    port: int,
+    public_key: bytes,
+    *,
+    versions: tuple[int, ...] | None = None,
+    nonce: bytes | None = None,
+) -> Response:
     transport, protocol = await open_udp_socket(host, port)
 
     try:
-        p = build_request(public_key=public_key)
+        p = build_request(versions=versions, public_key=public_key, nonce=nonce)
         payload = p.dump()
         transport.sendto(payload)
 
@@ -101,12 +116,20 @@ async def send_request(host: str, port: int, public_key: bytes) -> Response:
 
 
 def build_request(
-    versions: tuple[int, ...] = VERSIONS_SUPPORTED, public_key: bytes | None = None
+    versions: tuple[int, ...] | None = None,
+    public_key: bytes | None = None,
+    nonce: bytes | None = None,
 ) -> Packet:
     """Build a spec-compliant request padded to 1024 bytes (UDP)."""
 
+    if versions is None:
+        versions = VERSIONS_SUPPORTED
+
     ver = b"".join(struct.pack("<I", v) for v in versions)  # VER: uint32 list
-    nonce = os.urandom(32)  # NONC: 32 random bytes
+
+    if nonce is None:
+        nonce = os.urandom(64)
+
 
     tag_list: list[Tag] = [
         Tag(tag=tags.VER, value=ver),
@@ -194,9 +217,13 @@ class Message:
         if current_size >= 1024:
             return  # already at or above 1024 bytes
 
-        zlen = 1024 - current_size
-        zzzz_tag = Tag(tag=tags.ZZZZ, value=b"\x00" * zlen)
+        zzzz_tag = Tag(tag=tags.ZZZZ, value=b"")
         self.tags.append(zzzz_tag)
+
+        current_size = len(self.dump())
+
+        zlen = 1024 - current_size
+        zzzz_tag.value = b"\x00" * zlen
 
     @classmethod
     def load(cls, data: bytes) -> Message:
@@ -418,7 +445,7 @@ class Response:
 
         type = pop_by_predicate_optional(tag_list, lambda t: t.tag == tags.TYPE)
         if type is not None:
-            type, = struct.unpack("<I", type.value)
+            (type,) = struct.unpack("<I", type.value)
 
             if type != tags.TYPE_RESPONSE:
                 raise PacketError(f"Expected TYPE_RESPONSE, got {type}")
@@ -478,7 +505,9 @@ class Response:
                 delegation_context_string + self.certificate.delegation.raw,
             )
         except cryptography.exceptions.InvalidSignature:
-            raise VerificationError("Certificate signature invalid", reason="signature-certificate")
+            raise VerificationError(
+                "Certificate signature invalid", reason="signature-certificate"
+            )
 
         # The MIDP timestamp lies in the interval specified by the MINT and MAXT timestamps.
         midp = self.signed_response.midpoint
@@ -487,7 +516,9 @@ class Response:
             <= midp
             <= self.certificate.delegation.max_time
         ):
-            raise VerificationError("MIDP timestamp is outside of delegation bounds", reason="key-age")
+            raise VerificationError(
+                "MIDP timestamp is outside of delegation bounds", reason="key-age"
+            )
 
         # The INDX and PATH values prove a hash value derived from the request packet was included in the Merkle tree with value ROOT
         if not self._verify_merkle():
@@ -502,6 +533,8 @@ class Response:
                 self.signature, RESPONSE_CONTEXT_STRING + self.signed_response.raw
             )
         except cryptography.exceptions.InvalidSignature:
-            raise VerificationError("Response signature invalid", reason="signature-response")
+            raise VerificationError(
+                "Response signature invalid", reason="signature-response"
+            )
 
         return True
