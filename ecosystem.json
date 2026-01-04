@@ -1,0 +1,100 @@
+{
+  "servers": [
+    {
+      "name": "roughtime.cloudflare.com",
+      "version": 2147483659,
+      "publicKeyType": "ed25519",
+      "publicKey": "0GD7c3yP8xEc4Zl2zeuN2SlLvDVVocjsPSL8/Rl/7zg=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "roughtime.cloudflare.com:2003"
+        }
+      ]
+    },
+    {
+      "name": "roughtime.int08h.com",
+      "version": 2147483662,
+      "publicKeyType": "ed25519",
+      "publicKey": "iBVjxg/1j7y1+kQUTBYdTabxCppesU/07D4PMDJk2WA=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "roughtime.int08h.com:2002"
+        }
+      ]
+    },
+    {
+      "name": "roughtime.se",
+      "version": "IETF-Roughtime",
+      "publicKeyType": "ed25519",
+      "publicKey": "S3AzfZJ5CjSdkJ21ZJGbxqdYP/SoE8fXKY0+aicsehI=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "roughtime.se:2002"
+        }
+      ]
+    },
+    {
+      "name": "time.txryan.com",
+      "version": 2147483659,
+      "publicKeyType": "ed25519",
+      "publicKey": "iBVjxg/1j7y1+kQUTBYdTabxCppesU/07D4PMDJk2WA=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "time.txryan.com:2002"
+        }
+      ]
+    },
+    {
+      "name": "ilimit-rt02.ilimit.cat",
+      "version": 2147483662,
+      "publicKeyType": "ed25519",
+      "publicKey": "XTNZR7TIw4iMV2mNOVNPYzmWxXxg1DA16o2SYLp1k8k=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "ilimit-rt02.ilimit.cat:2002"
+        }
+      ]
+    },
+    {
+      "name": "ilimit-rt01.ilimit.cat",
+      "version": 2147483662,
+      "publicKeyType": "ed25519",
+      "publicKey": "Oj8AxjzCYMlBicllTdeiJOEluLHdxijGd6sSaS993eo=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "ilimit-rt01.ilimit.cat:2002"
+        }
+      ]
+    },
+    {
+      "name": "sth2.roughtime.netnod.se",
+      "version": 2147483655,
+      "publicKeyType": "ed25519",
+      "publicKey": "T/xxX4ERUBAOpt64Z8phWamKsASZxJ0VWuiPm3GS/8g=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "sth2.roughtime.netnod.se:2002"
+        }
+      ]
+    },
+    {
+      "name": "sth1.roughtime.netnod.se",
+      "version": 2147483655,
+      "publicKeyType": "ed25519",
+      "publicKey": "9l1JN4HakGnG44yyqyNNCb0HN0XfsysBbnl/kbZoZDc=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "sth1.roughtime.netnod.se:2002"
+        }
+      ]
+    }
+  ]
+}
