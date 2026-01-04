@@ -128,7 +128,7 @@ def build_request(
     ver = b"".join(struct.pack("<I", v) for v in versions)  # VER: uint32 list
 
     if nonce is None:
-        nonce = os.urandom(64)
+        nonce = os.urandom(32)
 
 
     tag_list: list[Tag] = [
