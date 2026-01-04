@@ -18,7 +18,7 @@ response = await roughly.send_request(
     port=2002,
     public_key=base64.b64decode(b"S3AzfZJ5CjSdkJ21ZJGbxqdYP/SoE8fXKY0+aicsehI="),
 )
-# Requests are always verified before being returned
+# Responses are always verified before being returned
 
 print("Current time:", response.signed_response.midpoint)
 ```
