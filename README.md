@@ -47,3 +47,17 @@ if confirm_malfeasance(report):
     with open("malfeasance_report.json", "w") as f:
         json.dump(report, f, indent=2)
 ```
+
+## Interoperability
+
+The interopability matrix of `roughly` against Roughtime servers looks like this:
+
+| Server                                                          |    |
+|-----------------------------------------------------------------|----|
+| [butterfield](https://github.com/signalsforgranted/butterfield) | ✅ |
+| [cloudflare](https://github.com/cloudflare/roughtime)           | ✅ |
+| [pyroughtime](https://github.com/dansarie/pyroughtime)          | ✅ |
+| [roughenough](https://github.com/int08h/roughenough/)           | ❌ |
+| [roughtimed](https://github.com/dansarie/roughtimed)            | ✅ |
+
+I'm unsure why `roughly` is unable to request time from `roughenough`. I'm looking into this, but if you have any ideas please open an issue!
