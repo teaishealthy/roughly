@@ -14,9 +14,9 @@
     },
     {
       "name": "roughtime.int08h.com",
-      "version": 2147483662,
+      "version": 2147483660,
       "publicKeyType": "ed25519",
-      "publicKey": "iBVjxg/1j7y1+kQUTBYdTabxCppesU/07D4PMDJk2WA=",
+      "publicKey": "AW5uAoTSTDfG5NfY1bTh08GUnOqlRb+HVhbJ3ODJvsE=",
       "addresses": [
         {
           "protocol": "udp",
@@ -26,7 +26,7 @@
     },
     {
       "name": "roughtime.se",
-      "version": "IETF-Roughtime",
+      "version": 2147483660,
       "publicKeyType": "ed25519",
       "publicKey": "S3AzfZJ5CjSdkJ21ZJGbxqdYP/SoE8fXKY0+aicsehI=",
       "addresses": [
