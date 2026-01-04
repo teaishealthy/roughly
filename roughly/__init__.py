@@ -145,12 +145,6 @@ def build_request(
 
 
 @dataclass
-class LoadedTag:
-    tag: int  # uint32
-    value: bytes
-
-
-@dataclass
 class Tag:
     tag: int  # uint32
     value: bytes
