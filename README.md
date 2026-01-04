@@ -65,10 +65,18 @@ The interopability matrix of `roughly` against Roughtime servers looks like this
 | [butterfield](https://github.com/signalsforgranted/butterfield) | ✅ |
 | [cloudflare](https://github.com/cloudflare/roughtime)           | ✅ |
 | [pyroughtime](https://github.com/dansarie/pyroughtime)          | ✅ |
-| [roughenough](https://github.com/int08h/roughenough/)           | ❌ |
+| [roughenough](https://github.com/int08h/roughenough/)           | ⚠️ |
 | [roughtimed](https://github.com/dansarie/roughtimed)            | ✅ |
 
-I'm unsure why `roughly` is unable to request time from `roughenough`. I'm looking into this, but if you have any ideas please open an issue!
+⚠️ `roughenough` only expects version `0x8000000c` and does not ignore unknown versions.
+Make sure to explicitly request only version `0x8000000c` when querying `roughenough` servers, i.e.:
+
+```python
+await roughly.send_request(
+    # <snip!>
+    versions=(0x8000000c,),
+)
+```
 
 ## License
 
