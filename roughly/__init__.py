@@ -504,10 +504,10 @@ class Response:
                 self.certificate.signature,
                 delegation_context_string + self.certificate.delegation.raw,
             )
-        except cryptography.exceptions.InvalidSignature:
+        except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
                 "Certificate signature invalid", reason="signature-certificate"
-            )
+            ) from e
 
         # The MIDP timestamp lies in the interval specified by the MINT and MAXT timestamps.
         midp = self.signed_response.midpoint
@@ -532,9 +532,9 @@ class Response:
             public_key.verify(
                 self.signature, RESPONSE_CONTEXT_STRING + self.signed_response.raw
             )
-        except cryptography.exceptions.InvalidSignature:
+        except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
                 "Response signature invalid", reason="signature-response"
-            )
+            ) from e
 
         return True
