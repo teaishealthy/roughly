@@ -48,6 +48,14 @@ if confirm_malfeasance(report):
         json.dump(report, f, indent=2)
 ```
 
+## Ecosystem
+
+An example ecosystem file can be found at [ecosystem.json](ecosystem.json), I tried my best to include as many servers as I could find.
+Note that I couldn't find the correct public keys for the servers at *.roughtime.netnod.se.
+
+If you know of any other Roughtime servers, run your own server, or have updated public keys for any of the listed servers, please open a PR or an issue!
+
+
 ## Interoperability
 
 The interopability matrix of `roughly` against Roughtime servers looks like this:
