@@ -130,7 +130,6 @@ def build_request(
     if nonce is None:
         nonce = os.urandom(32)
 
-
     tag_list: list[Tag] = [
         Tag(tag=tags.VER, value=ver),
         Tag(tag=tags.NONC, value=nonce),
@@ -394,6 +393,9 @@ def partial_sha512(data: bytes) -> bytes:
 
 @dataclass
 class Response:
+    raw: bytes
+    """The raw bytes of the Roughtime response packet"""
+
     request: bytes
     """The raw bytes of Roughtime packet that triggered this response"""
 
@@ -456,6 +458,7 @@ class Response:
         indx = pop_by_predicate(tag_list, lambda t: t.tag == tags.INDX)
 
         response = cls(
+            raw=raw,
             request=request,
             packet=p,
             signature=sig.value,
