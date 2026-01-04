@@ -311,7 +311,8 @@ class SignedResponse:
 
     radius: int
     midpoint: int
-    version: tuple[int, ...]
+    version: int
+    versions: tuple[int, ...]
     root: bytes
 
     @classmethod
@@ -319,22 +320,28 @@ class SignedResponse:
         message = Message.load(data)
         radius_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.RADI)
         midpoint_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.MIDP)
-        version_tag = pop_by_predicate_optional(
+        versions_tag = pop_by_predicate_optional(
             message.tags, lambda t: t.tag == tags.VERS
+        )
+        version_tag = pop_by_predicate_optional(
+            message.tags, lambda t: t.tag == tags.VER
         )
         root_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.ROOT)
 
         (radius,) = struct.unpack("<I", radius_tag.value)
         (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
-        version = (
-            struct.unpack(f"<{len(version_tag.value) // 4}I", version_tag.value)
-            if version_tag
+        versions = (
+            struct.unpack(f"<{len(versions_tag.value) // 4}I", versions_tag.value)
+            if versions_tag
             else ()
+        )
+        version = (
+            struct.unpack("<I", version_tag.value)[0] if version_tag else 0
         )
         root = root_tag.value
 
         return cls(
-            raw=data, radius=radius, midpoint=midpoint, version=version, root=root
+            raw=data, radius=radius, midpoint=midpoint, versions=versions, version=version, root=root
         )
 
 
@@ -429,7 +436,7 @@ class Response:
             (version,) = struct.unpack("<I", self.packet.message.tags[result].value[:4])
             return version
 
-        return self.signed_response.version[0]
+        return self.signed_response.version
 
     @classmethod
     def from_packet(cls, *, raw: bytes, request: bytes) -> Response:
