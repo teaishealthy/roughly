@@ -193,7 +193,7 @@ def responses_consistent(
         midp2 = resp2.signed_response.midpoint
         radi2 = resp2.signed_response.radius
 
-        if midp1 - radi1 > midp2 + radi2:
+        if abs(midp1 - midp2) > (radi1 + radi2):
             return False
 
     return True
