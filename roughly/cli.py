@@ -1,0 +1,229 @@
+import asyncio
+import base64
+import json
+import time
+import traceback
+from pathlib import Path
+from typing import Any, cast
+
+import click
+
+import roughly
+import roughly.ecosystem
+
+REASON_EXPLANATIONS: dict[roughly.RoughtimeErrorReason, str] = {
+    "key-age": "The delegated signing key is too old.",
+    "merkle": "The server signed timestamps for multiple requests at once. This response could not be proven to be part of the signed batch.",
+    "signature-response": "The server's response signature could not be verified.",
+    "signature-certificate": "The server's delegation certificate signature could not be verified.",
+}
+
+
+@click.group()
+def cli():
+    """roughly: A Roughtime client"""
+
+
+async def _query(
+    host: str, port: int, public_key: bytes, *, timeout: float
+) -> roughly.Response:
+    async with asyncio.timeout(timeout):
+        return await roughly.send_request(host, port, public_key)
+
+
+async def _very_dangerously_query(
+    host: str, port: int, public_key: bytes | None, *, timeout: float
+) -> roughly.Response:
+    async with asyncio.timeout(timeout):
+        return await roughly.very_dangerously_send_request_and_do_not_verify(
+            host,
+            port,
+            public_key,
+        )
+
+
+@cli.command()
+@click.argument("host")
+@click.argument("port", type=int, default=2002)
+@click.argument("public-key", required=False)
+@click.option("--terse", is_flag=True, help="Only output the time")
+@click.option("--timeout", type=float, default=5.0, help="Request timeout in seconds")
+@click.option(
+    "--very-dangerously-disable-verification",
+    is_flag=True,
+    help="Disable response verification. Only use this if you ABSOLUTELY know what you're doing!",
+)
+def query(
+    host: str,
+    port: int,
+    public_key: str | None,
+    terse: bool,
+    timeout: float,
+    very_dangerously_disable_verification: bool,
+):
+    """Query a Roughtime server for the current time."""
+
+    query_function = _query
+    if very_dangerously_disable_verification:
+        query_function = _very_dangerously_query
+    elif public_key is None:
+        click.echo(
+            "Public key is required unless --very-dangerously-disable-verification is set",
+            err=True,
+        )
+        return
+
+    try:
+        # The cast here is needed, but safe, because of the check above.
+        key_bytes = None
+        if public_key is not None:
+            key_bytes = base64.b64decode(public_key)
+        response = asyncio.run(
+            query_function(host, port, cast(Any, key_bytes), timeout=timeout)
+        )
+    except asyncio.TimeoutError:
+        click.echo("Request timed out", err=True)
+        return
+    except roughly.VerificationError as e:
+        traceback.print_exc()
+        click.echo()
+        click.echo("Response received but rejected during verification", err=True)
+        explanation = REASON_EXPLANATIONS.get(e.reason)
+        if explanation:
+            click.echo(f"{e.reason}: {explanation}", err=True)
+        else:
+            click.echo(f"Reason: {e.reason}", err=True)
+        return
+    except roughly.RoughtimeError:
+        traceback.print_exc()
+        click.echo()
+        click.echo(
+            "A Roughtime protocol error occured while querying the server", err=True
+        )
+        click.echo("If you believe this is a bug, please file an issue", err=True)
+        return
+
+    unix_time = response.signed_response.midpoint
+    radius = response.signed_response.radius
+    if terse:
+        click.echo(unix_time)
+    else:
+        click.echo(f"Current time: {unix_time} ± {radius} seconds")
+
+
+@cli.group()
+def ecosystem():
+    """Commands for working with Roughtime ecosystems."""
+
+
+async def _ecosystem_state(ecosystem_path: Path) -> None:
+    ecosystem = roughly.ecosystem.load_ecosystem(ecosystem_path)
+    selected_servers = await roughly.ecosystem.pick_servers(ecosystem)
+
+    click.echo(
+        f"Out of {len(ecosystem)} servers, {len(selected_servers)} yielded proper responses."
+    )
+    failed_to_select = set(server.name for server in ecosystem) - set(
+        server.name for server in selected_servers
+    )
+    if failed_to_select:
+        click.echo("Failed to select the following servers:")
+        for server in failed_to_select:
+            click.echo(f"- {server}")
+
+    click.echo("\nAvailable servers:")
+    for server in selected_servers:
+        click.echo(f"- {server.name} ({server.version:#x})")
+
+    tasks: list[
+        asyncio.Task[tuple[roughly.ecosystem.Server, roughly.Response | None]]
+    ] = []
+
+    for server in selected_servers:
+        task = asyncio.create_task(
+            roughly.ecosystem._query_server(  # type: ignore
+                server,
+                timeout=1.0,
+            )
+        )
+        tasks.append(task)
+
+    results = await asyncio.gather(*tasks)
+
+    current_time = time.time()
+    click.echo(f"\nAt {current_time:.0f} (machine time) received responses from:")
+    for server, response in results:
+        if response is not None:
+            server_time = response.signed_response.midpoint
+            radius = response.signed_response.radius
+            click.echo(f"- {server.name}: time={server_time} ± {radius} seconds")
+
+
+@ecosystem.command()
+@click.argument(
+    "ecosystem-path",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("ecosystem.json"),
+)
+def state(ecosystem_path: Path):
+    """Evaluate the state of a Roughtime ecosystem."""
+    asyncio.run(_ecosystem_state(ecosystem_path))
+
+
+async def _malfeasance_test(
+    ecosystem_path: Path,
+    always_write: bool = False,
+    report_location: Path | None = None,
+):
+    report_location = report_location or Path("malfeasance_report.json")
+    ecosystem = roughly.ecosystem.load_ecosystem(ecosystem_path)
+    selected_servers = await roughly.ecosystem.pick_servers(ecosystem)
+    print("Selected servers for malfeasance testing:")
+    for server in selected_servers:
+        print(f"- {server.name}")
+    responses = await roughly.ecosystem.query_servers(selected_servers)
+    report = roughly.ecosystem.malfeasance_report(responses, selected_servers)
+
+    if had_malfeasance := roughly.ecosystem.confirm_malfeasance(report):
+        print(f"Malfeasance detected. Writing report to '{report_location}'.")
+        with report_location.open("w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+    else:
+        print("No malfeasance detected.")
+
+    if not had_malfeasance and always_write:
+        with report_location.open("w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        click.echo(f"Report saved to '{report_location}' (no malfeasance detected).")
+
+
+@ecosystem.command()
+@click.option(
+    "--always-write",
+    is_flag=True,
+    help="Always write a malfeasance report, even if no malfeasance is detected",
+)
+@click.option(
+    "--report-location",
+    type=click.Path(path_type=Path),
+    help="Location to save the malfeasance report",
+)
+@click.option(
+    "--ecosystem-path",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path("ecosystem.json"),
+    help="Path to the ecosystem JSON file",
+)
+def malfeasance(always_write: bool, report_location: Path | None, ecosystem_path: Path):
+    """Run a malfeasance test on the Roughtime ecosystem."""
+    asyncio.run(
+        _malfeasance_test(
+            always_write=always_write,
+            report_location=report_location,
+            ecosystem_path=ecosystem_path,
+        )
+    )
+
+
+if __name__ == "__main__":
+    cli()

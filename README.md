@@ -10,6 +10,43 @@ Draft versions 07 through 15 are supported.
 
 ## Quickstart
 
+### Installation
+You can install `roughly` from GitHub using your favorite package manager, for example with `pip`:
+
+```bash
+pip install "git+https://github.tcom/teaishealthy/roughly.git"
+# or with the cli extra
+pip install "git+https://github.tcom/teaishealthy/roughly.git#egg=project[cli]"
+```
+
+### As a CLI
+
+You can use `roughly` as a command line tool to query Roughtime servers.
+Install `roughly` with the `cli` extra using your favorite CLI package manager, for example with `uv` (or `pipx`):
+
+```bash
+# Assuming you cloned the repository
+uv tool install .[cli]
+pipx install .[cli]
+```
+
+Then you can query a Roughtime server like so:
+
+```bash
+roughly query roughtime.se 2002 S3AzfZJ5CjSdkJ21ZJGbxqdYP/SoE8fXKY0+aicsehI=
+```
+
+Or run ecosystem queries (assuming you have an `ecosystem.json` file):
+
+```bash
+roughly ecosystem malfeasance
+roughly ecosystem state
+```
+
+### As a library
+
+`roughly` can be used as an asynchronous library to query Roughtime servers from your own Python code.
+
 ```python
 import roughly
 
