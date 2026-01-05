@@ -13,6 +13,9 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from roughly import tags
 
+MJD_UNIX_EPOCH = 40587
+SECONDS_IN_A_DAY = 86400
+
 ROUGHTIM = 0x4D49544847554F52
 RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
@@ -305,6 +308,17 @@ def split_into_chunks(data: bytes, chunk_size: int) -> list[bytes]:
     return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
 
 
+def convert_mjd_to_unix(mjd: int) -> int:
+    mjd_days = mjd >> 40
+    microseconds = mjd & 0xFFFFFFFFFF
+    unix_timestamp = (mjd_days - MJD_UNIX_EPOCH) * SECONDS_IN_A_DAY + microseconds_to_seconds(microseconds)
+    return unix_timestamp
+
+
+def microseconds_to_seconds(microseconds: int) -> int:
+    return microseconds // 1_000_000
+
+
 @dataclass
 class SignedResponse:
     raw: bytes
@@ -316,7 +330,7 @@ class SignedResponse:
     root: bytes
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> SignedResponse:
+    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> SignedResponse:
         message = Message.load(data)
         radius_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.RADI)
         midpoint_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.MIDP)
@@ -330,6 +344,12 @@ class SignedResponse:
 
         (radius,) = struct.unpack("<I", radius_tag.value)
         (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
+        if draft7:
+            midpoint = convert_mjd_to_unix(midpoint)
+            # We lose a ton of precision here, but I don't really care about draft-7 that much
+            # later specs require a radius of at least 1 second anyway
+            radius = max(1, microseconds_to_seconds(radius))
+
         versions = (
             struct.unpack(f"<{len(versions_tag.value) // 4}I", versions_tag.value)
             if versions_tag
@@ -359,7 +379,7 @@ class Certificate:
     signature: bytes
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> Certificate:
+    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> Certificate:
         message = Message.load(data)
         dele_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.DELE)
         dele_message = Message.load(dele_tag.value)
@@ -371,6 +391,10 @@ class Certificate:
         public_key = pubk_tag.value
         (min_time,) = struct.unpack("<Q", mint_tag.value)
         (max_time,) = struct.unpack("<Q", maxt_tag.value)
+
+        if draft7:
+            min_time = convert_mjd_to_unix(min_time)
+            max_time = convert_mjd_to_unix(max_time)
 
         delegation = Delegation(
             raw=dele_tag.value,
@@ -464,6 +488,13 @@ class Response:
         cert = pop_by_predicate(tag_list, lambda t: t.tag == tags.CERT)
         indx = pop_by_predicate(tag_list, lambda t: t.tag == tags.INDX)
 
+        draft7 = False
+        maybe_ver = pop_by_predicate_optional(tag_list, lambda t: t.tag == tags.VER)
+        if maybe_ver is not None:
+            (maybe_ver,) = struct.unpack("<I", maybe_ver.value)
+            if maybe_ver == 0x80000000 + 7:
+                draft7 = True
+
         response = cls(
             raw=raw,
             request=request,
@@ -472,8 +503,8 @@ class Response:
             nonce=nonc.value,
             type=type,
             path=split_into_chunks(path.value, 4),
-            signed_response=SignedResponse.from_bytes(srep.value),
-            certificate=Certificate.from_bytes(cert.value),
+            signed_response=SignedResponse.from_bytes(srep.value, draft7=draft7),
+            certificate=Certificate.from_bytes(cert.value, draft7=draft7),
             index=struct.unpack("<I", indx.value)[0],
         )
 
