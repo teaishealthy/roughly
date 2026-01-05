@@ -77,6 +77,12 @@ await roughly.send_request(
 )
 ```
 
+### draft-7
+
+Support for draft-7 is limited, in the sense that `roughly` will fit responses from draft-7 servers into the draft-15 data structures.
+This means that some fields that are not present in draft-8+ (such as DUT1, DTAI, and LEAP) will be missing.
+Additionally draft-7 offered for the precision of radius to be in microseconds, while draft-8+ uses seconds, this precision will be lost when querying draft-7 servers, and be clamped to a minimum of one second.
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
