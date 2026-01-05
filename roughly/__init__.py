@@ -118,6 +118,32 @@ async def send_request(
     return response
 
 
+async def very_dangerously_send_request_and_do_not_verify(
+    host: str,
+    port: int,
+    public_key: bytes | None = None,
+    *,
+    versions: tuple[int, ...] | None = None,
+    nonce: bytes | None = None,
+) -> Response:
+    """As should be clear from the function name, this function sends a Roughtime request
+    but does NOT verify the response in any way. This is dangerous and should only be used
+    if you REALLY know what you're doing."""
+    transport, protocol = await open_udp_socket(host, port)
+
+    try:
+        p = build_request(versions=versions, public_key=public_key, nonce=nonce)
+        payload = p.dump()
+        transport.sendto(payload)
+
+        data = await protocol.recv()
+        response = Response.from_packet(raw=data, request=payload)
+    finally:
+        transport.close()
+
+    return response
+
+
 def build_request(
     versions: tuple[int, ...] | None = None,
     public_key: bytes | None = None,
