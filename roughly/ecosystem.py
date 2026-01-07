@@ -4,6 +4,7 @@ import asyncio
 import base64
 import itertools
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
@@ -24,6 +25,8 @@ VERSION_LOOKUP: dict[str, int] = {
     "IETF-Roughtime": 0x80000000 | 7,
     "Google-Roughtime": 3000600613,
 }
+
+logger = logging.getLogger(__name__)
 
 
 class BadReport(RoughtimeError):  # noqa: N818
@@ -94,6 +97,12 @@ def load_ecosystem(path: Path) -> list[Server]:
 
 
 async def _query_server(server: Server, *, timeout: float) -> tuple[Server, Response | None]:
+    logger.debug(
+        "Querying server %s at addresses: %s",
+        server.name,
+        ", ".join(addr.address for addr in server.addresses),
+    )
+
     for addr in server.addresses:
         host, port_str = addr.address.rsplit(":", 1)
         port = int(port_str)
@@ -106,8 +115,8 @@ async def _query_server(server: Server, *, timeout: float) -> tuple[Server, Resp
                     versions=(server.version,),
                 )
                 return server, response
-        except Exception:  # noqa: BLE001, S112
-            # TODO: (S112) log exception
+        except Exception:
+            logger.exception("Failed to query server %s at address %s", server.name, addr.address)
             continue
 
     return server, None
@@ -134,6 +143,8 @@ async def pick_servers(servers: list[Server], *, timeout: float = 1.0) -> list[S
         if response is not None:
             successful_servers.append(server)
 
+    logger.debug("Picked %d/%d servers for query", len(successful_servers), len(servers))
+
     return successful_servers
 
 
@@ -149,6 +160,8 @@ async def query_servers(servers: list[Server]) -> list[tuple[Response, bytes]]:
     Returns:
         list[tuple[Response, bytes]]: The responses and random bytes used for each query.
     """
+    logger.debug("Querying %d servers for measurement sequence", len(servers))
+
     responses: list[tuple[Response, bytes]] = []
     rand = os.urandom(32)
     nonce = rand

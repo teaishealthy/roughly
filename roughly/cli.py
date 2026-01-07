@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import time
 import traceback
 from pathlib import Path
@@ -24,9 +25,17 @@ REASON_EXPLANATIONS: dict[roughly.RoughtimeErrorReason, str] = {
 }
 
 
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable logging",
+)
 @click.group()
-def cli() -> None:
+def cli(verbose: bool) -> None:
     """roughly: A Roughtime client."""
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
 
 
 async def _query(host: str, port: int, public_key: bytes, *, timeout: float) -> roughly.Response:

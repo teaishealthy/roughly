@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import struct
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
 RoughtimeErrorReason = Literal["merkle", "key-age", "signature-certificate", "signature-response"]
+
+logger = logging.getLogger(__name__)
 
 
 class RoughtimeError(Exception):
@@ -104,20 +107,15 @@ async def send_request(
     versions: tuple[int, ...] | None = None,
     nonce: bytes | None = None,
 ) -> Response:
-    transport, protocol = await open_udp_socket(host, port)
-
-    try:
-        p = build_request(versions=versions, public_key=public_key, nonce=nonce)
-        payload = p.dump()
-        transport.sendto(payload)
-
-        data = await protocol.recv()
-        response = Response.from_packet(raw=data, request=payload)
-
-        response.verify(public_key)
-    finally:
-        transport.close()
-
+    response = await very_dangerously_send_request_and_do_not_verify(
+        host,
+        port,
+        public_key,
+        versions=versions,
+        nonce=nonce,
+    )
+    response.verify(public_key)
+    logger.debug("Verified response from %s:%d", host, port)
     return response
 
 
@@ -132,15 +130,25 @@ async def very_dangerously_send_request_and_do_not_verify(
     """As should be clear from the function name, this function sends a Roughtime request
     but does NOT verify the response in any way. This is dangerous and should only be used
     if you REALLY know what you're doing."""  # noqa: D205 D209
+    logger.debug(
+        "Sending request to %s:%d with versions=%s",
+        host,
+        port,
+        ", ".join(f"{v:#x}" for v in versions) if versions else "default",
+    )
     transport, protocol = await open_udp_socket(host, port)
+    logger.debug("Opened UDP socket to %s:%d", host, port)
 
     try:
         p = build_request(versions=versions, public_key=public_key, nonce=nonce)
         payload = p.dump()
         transport.sendto(payload)
+        logger.debug("Sent request to %s:%d", host, port)
 
         data = await protocol.recv()
+        logger.debug("Received %d bytes from %s:%d", len(data), host, port)
         response = Response.from_packet(raw=data, request=payload)
+        logger.debug("Parsed (unverified) response from %s:%d", host, port)
     finally:
         transport.close()
 
@@ -511,6 +519,7 @@ class Response:
         maybe_ver = pop_by_predicate_optional(tag_list, lambda t: t.tag == tags.VER)
         if maybe_ver is not None:
             (maybe_ver,) = struct.unpack("<I", maybe_ver.value)
+
             if maybe_ver == 0x80000000 + 7:
                 draft7 = True
 
