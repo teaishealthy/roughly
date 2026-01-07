@@ -1,7 +1,8 @@
 # roughly
 
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/teaishealthy/teaishealthy/refs/heads/main/ruff-badge.json&style=flat-square)](https://github.com/astral-sh/ruff)
-![WIP](https://img.shields.io/badge/status-WIP-red?style=flat-square)
+[![Roughtime draft 07-15](https://img.shields.io/badge/draft%2007--15-darkviolet?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15)
+![WIP](https://img.shields.io/badge/WIP-red?style=flat-square)
 
 An asynchronous client library for the Roughtime protocol for Python.
 
