@@ -253,7 +253,7 @@ class Message:
 
         current_size = len(Packet(message=self).dump())
 
-        zlen = 1024 - current_size
+        zlen = PACKET_SIZE - current_size
         zzzz_tag.value = b"\x00" * zlen
 
     @classmethod
