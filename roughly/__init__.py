@@ -1,3 +1,5 @@
+"""Roughtime protocol implementation in Python."""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,13 +7,18 @@ import io
 import os
 import struct
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Literal
 
 import cryptography.exceptions
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from roughly import tags
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+PACKET_SIZE = 1024
 
 MJD_UNIX_EPOCH = 40587
 SECONDS_IN_A_DAY = 86400
@@ -21,9 +28,7 @@ RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
-RoughtimeErrorReason = Literal[
-    "merkle", "key-age", "signature-certificate", "signature-response"
-]
+RoughtimeErrorReason = Literal["merkle", "key-age", "signature-certificate", "signature-response"]
 
 
 class RoughtimeError(Exception):
@@ -31,24 +36,24 @@ class RoughtimeError(Exception):
 
 
 class PacketError(RoughtimeError):
-    """Represents an error in packet parsing"""
+    """Represents an error in packet parsing."""
 
 
 class FormatError(RoughtimeError):
-    """Represents an error in packet formatting"""
+    """Represents an error in packet formatting."""
 
 
 class VerificationError(RoughtimeError):
-    """Represents an error in response verification"""
+    """Represents an error in response verification."""
 
-    def __init__(self, message: str, *, reason: RoughtimeErrorReason):
+    def __init__(self, message: str, *, reason: RoughtimeErrorReason) -> None:
         super().__init__(message)
         self.reason: RoughtimeErrorReason = reason
 
 
 def build_supported_versions(start: int, end: int) -> tuple[int, ...]:
     # Build a tuple of supported Roughtime versions (inclusive of start and end)
-    versions = (1,) + tuple(0x80000000 | v for v in range(start, end + 1))
+    versions = (1, *tuple(2147483648 | v for v in range(start, end + 1)))
     return tuple(sorted(versions))
 
 
@@ -56,23 +61,21 @@ VERSIONS_SUPPORTED = build_supported_versions(7, 15)
 
 
 class QueueDatagramProtocol(asyncio.DatagramProtocol):
-    def __init__(self, loop: asyncio.AbstractEventLoop):
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
         self.transport: asyncio.DatagramTransport | None = None
-        self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]] | Exception] = (
-            asyncio.Queue()
-        )
+        self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]] | Exception] = asyncio.Queue()
 
-    def connection_made(self, transport: asyncio.DatagramTransport):
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]):
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         self.queue.put_nowait((data, addr))
 
-    def error_received(self, exc: Exception):
+    def error_received(self, exc: Exception) -> None:
         self.queue.put_nowait(exc)
 
-    def connection_lost(self, exc: Exception | None):
+    def connection_lost(self, exc: Exception | None) -> None:
         if exc:
             self.queue.put_nowait(exc)
         self.queue.put_nowait(RoughtimeError("Connection closed unexpectedly"))
@@ -84,7 +87,7 @@ class QueueDatagramProtocol(asyncio.DatagramProtocol):
         return item[0]
 
 
-async def open_udp_socket(host: str, port: int):
+async def open_udp_socket(host: str, port: int):  # noqa: ANN201
     loop = asyncio.get_running_loop()
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: QueueDatagramProtocol(loop),
@@ -128,7 +131,7 @@ async def very_dangerously_send_request_and_do_not_verify(
 ) -> Response:
     """As should be clear from the function name, this function sends a Roughtime request
     but does NOT verify the response in any way. This is dangerous and should only be used
-    if you REALLY know what you're doing."""
+    if you REALLY know what you're doing."""  # noqa: D205 D209
     transport, protocol = await open_udp_socket(host, port)
 
     try:
@@ -150,7 +153,6 @@ def build_request(
     nonce: bytes | None = None,
 ) -> Packet:
     """Build a spec-compliant request padded to 1024 bytes (UDP)."""
-
     if versions is None:
         versions = VERSIONS_SUPPORTED
 
@@ -185,9 +187,8 @@ class Message:
 
     def debug_print(self) -> None:
         for tag in self.tags:
-            print(
-                f"Tag {tag.tag.to_bytes(4, 'little').decode('ascii', errors='replace')}: {tag.value}"
-            )
+            tag_ascii = tag.tag.to_bytes(4, "little").decode("ascii", errors="replace")
+            print(f"Tag {tag_ascii}: {tag.value}")  # noqa: T201
 
     def dump(self) -> bytes:
         num_pairs = len(self.tags)
@@ -229,14 +230,14 @@ class Message:
         return header + values_data
 
     def prepare(self) -> None:
-        """Prepares a Roughtime message for sending"""
+        """Prepares a Roughtime message for sending."""
         self.tags.sort(key=lambda t: t.tag)
         self.zzzz()
 
     def zzzz(self) -> None:
         # fill the message with a ZZZZ tag to pad until 1024 bytes
         current_size = len(self.dump())
-        if current_size >= 1024:
+        if current_size >= PACKET_SIZE:
             return  # already at or above 1024 bytes
 
         zzzz_tag = Tag(tag=tags.ZZZZ, value=b"")
@@ -256,12 +257,12 @@ class Message:
 
         offsets = [0]
 
-        for i in range(num_pairs - 1):
+        for _ in range(num_pairs - 1):
             (offset,) = struct.unpack("<I", reader.read(4))
             offsets.append(offset)
 
         tags: list[int] = []
-        for i in range(num_pairs):
+        for _ in range(num_pairs):
             (tag,) = struct.unpack("<I", reader.read(4))
             tags.append(tag)
 
@@ -312,18 +313,14 @@ def pop_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> T
     raise RoughtimeError("Tag not found matching predicate")
 
 
-def pop_by_predicate_optional(
-    tag_list: list[Tag], predicate: Callable[[Tag], bool]
-) -> Tag | None:
+def pop_by_predicate_optional(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> Tag | None:
     result = find_by_predicate(tag_list, predicate)
     if result is not None:
         return tag_list.pop(result)
     return None
 
 
-def find_by_predicate(
-    tag_list: list[Tag], predicate: Callable[[Tag], bool]
-) -> int | None:
+def find_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> int | None:
     for i, tag in enumerate(tag_list):
         if predicate(tag):
             return i
@@ -337,8 +334,7 @@ def split_into_chunks(data: bytes, chunk_size: int) -> list[bytes]:
 def convert_mjd_to_unix(mjd: int) -> int:
     mjd_days = mjd >> 40
     microseconds = mjd & 0xFFFFFFFFFF
-    unix_timestamp = (mjd_days - MJD_UNIX_EPOCH) * SECONDS_IN_A_DAY + microseconds_to_seconds(microseconds)
-    return unix_timestamp
+    return (mjd_days - MJD_UNIX_EPOCH) * SECONDS_IN_A_DAY + microseconds_to_seconds(microseconds)
 
 
 def microseconds_to_seconds(microseconds: int) -> int:
@@ -360,12 +356,8 @@ class SignedResponse:
         message = Message.load(data)
         radius_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.RADI)
         midpoint_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.MIDP)
-        versions_tag = pop_by_predicate_optional(
-            message.tags, lambda t: t.tag == tags.VERS
-        )
-        version_tag = pop_by_predicate_optional(
-            message.tags, lambda t: t.tag == tags.VER
-        )
+        versions_tag = pop_by_predicate_optional(message.tags, lambda t: t.tag == tags.VERS)
+        version_tag = pop_by_predicate_optional(message.tags, lambda t: t.tag == tags.VER)
         root_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.ROOT)
 
         (radius,) = struct.unpack("<I", radius_tag.value)
@@ -381,13 +373,16 @@ class SignedResponse:
             if versions_tag
             else ()
         )
-        version = (
-            struct.unpack("<I", version_tag.value)[0] if version_tag else 0
-        )
+        version = struct.unpack("<I", version_tag.value)[0] if version_tag else 0
         root = root_tag.value
 
         return cls(
-            raw=data, radius=radius, midpoint=midpoint, versions=versions, version=version, root=root
+            raw=data,
+            radius=radius,
+            midpoint=midpoint,
+            versions=versions,
+            version=version,
+            root=root,
         )
 
 
@@ -482,11 +477,9 @@ class Response:
 
     @property
     def version(self) -> int:
-        """The version of the response"""
+        """The version of the response."""
         if not self.signed_response.version:
-            result = find_by_predicate(
-                self.packet.message.tags, lambda t: t.tag == tags.VER
-            )
+            result = find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.VER)
             if result is None:
                 raise PacketError("No VER tag found in response packet")
             (version,) = struct.unpack("<I", self.packet.message.tags[result].value[:4])
@@ -584,15 +577,14 @@ class Response:
         # The MIDP timestamp lies in the interval specified by the MINT and MAXT timestamps.
         midp = self.signed_response.midpoint
         if not (
-            self.certificate.delegation.min_time
-            <= midp
-            <= self.certificate.delegation.max_time
+            self.certificate.delegation.min_time <= midp <= self.certificate.delegation.max_time
         ):
             raise VerificationError(
                 "MIDP timestamp is outside of delegation bounds", reason="key-age"
             )
 
-        # The INDX and PATH values prove a hash value derived from the request packet was included in the Merkle tree with value ROOT
+        # The INDX and PATH values prove a hash value derived from the request packet was
+        # included in the Merkle tree with value ROOT
         if not self._verify_merkle():
             raise VerificationError("Merkle tree verification failed", reason="merkle")
 
@@ -601,9 +593,7 @@ class Response:
             self.certificate.delegation.public_key
         )
         try:
-            public_key.verify(
-                self.signature, RESPONSE_CONTEXT_STRING + self.signed_response.raw
-            )
+            public_key.verify(self.signature, RESPONSE_CONTEXT_STRING + self.signed_response.raw)
         except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
                 "Response signature invalid", reason="signature-response"

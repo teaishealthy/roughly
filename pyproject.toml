@@ -11,3 +11,48 @@ cli = ["click>=8.3.1"]
 
 [project.scripts]
 roughly = "roughly.cli:cli"
+
+[dependency-groups]
+dev = ["ruff>=0.14.10"]
+
+[tool.ruff]
+include = ["roughly/*"]
+line-length = 100
+
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "A001",   # variable shadowing a built-in
+    "A002",   # argument shadowing a built-in
+    "ANN401", # no Any
+
+    "ASYNC109", # async function with timeout parameter
+
+    "TC006",  # runtime-cast-value, i think it looks bad
+    "TRY003", # error messages in exceptions
+
+    "TD002",
+    "TD003",
+    "FIX002",
+
+    # these are disabled because i can't configure what 'public' means
+    "D100", # missing docstring in public module
+    "D101", # missing docstring in public class
+    "D102", # missing docstring in public method
+    "D103", # missing docstring in public function
+    "D107", # missing docstring in __init__
+
+    # disabled because of `ruff format`
+    "COM812",
+    "ISC001",
+
+    "EM101", # use of string literals in exceptions
+    "EM102", # use of f-string literals in exceptions
+
+    "SLF001", # private member access
+]
+
+
+[tool.ruff.lint.pydocstyle]
+convention = "google" # Accepts: "google", "numpy", or "pep257".

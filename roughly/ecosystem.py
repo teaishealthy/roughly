@@ -6,8 +6,7 @@ import itertools
 import json
 import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from roughly import (
     Response,
@@ -17,6 +16,9 @@ from roughly import (
     send_request,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 # Because Cloudflare's ecosystem file uses version strings instead of integers
 VERSION_LOOKUP: dict[str, int] = {
     "IETF-Roughtime": 0x80000000 | 7,
@@ -24,7 +26,7 @@ VERSION_LOOKUP: dict[str, int] = {
 }
 
 
-class BadReport(RoughtimeError):
+class BadReport(RoughtimeError):  # noqa: N818
     """Raised when a malfeasance report is invalid."""
 
 
@@ -91,9 +93,7 @@ def load_ecosystem(path: Path) -> list[Server]:
     return [Server.from_dict(item) for item in data["servers"]]
 
 
-async def _query_server(
-    server: Server, *, timeout: float
-) -> tuple[Server, Response | None]:
+async def _query_server(server: Server, *, timeout: float) -> tuple[Server, Response | None]:
     for addr in server.addresses:
         host, port_str = addr.address.rsplit(":", 1)
         port = int(port_str)
@@ -106,8 +106,10 @@ async def _query_server(
                     versions=(server.version,),
                 )
                 return server, response
-        except Exception:
+        except Exception:  # noqa: BLE001, S112
+            # TODO: (S112) log exception
             continue
+
     return server, None
 
 
@@ -116,13 +118,14 @@ async def pick_servers(servers: list[Server], *, timeout: float = 1.0) -> list[S
 
     Args:
         servers (list[Server]): The servers to pick from.
+        timeout (float, optional): The timeout for each server query. Defaults to 1.0.
 
     Returns:
         list[Server]: The selected servers for the query
     """
     tasks: list[asyncio.Task[tuple[Server, Response | None]]] = []
     for server in servers:
-        tasks.append(asyncio.create_task(_query_server(server, timeout=timeout)))
+        tasks.append(asyncio.create_task(_query_server(server, timeout=timeout)))  # noqa: PERF401
 
     results: list[tuple[Server, Response | None]] = await asyncio.gather(*tasks)
 
@@ -146,7 +149,6 @@ async def query_servers(servers: list[Server]) -> list[tuple[Response, bytes]]:
     Returns:
         list[tuple[Response, bytes]]: The responses and random bytes used for each query.
     """
-
     responses: list[tuple[Response, bytes]] = []
     rand = os.urandom(32)
     nonce = rand
@@ -169,8 +171,8 @@ async def query_servers(servers: list[Server]) -> list[tuple[Response, bytes]]:
                     rand = os.urandom(32)
                     nonce = partial_sha512(response.raw + rand)
 
-            except Exception:
-                raise RoughtimeError(f"Failed to query {host} at {addr.address}")
+            except Exception as e:
+                raise RoughtimeError(f"Failed to query {host} at {addr.address}") from e
     return responses
 
 
@@ -185,7 +187,7 @@ def responses_consistent(
 
     Returns:
         bool: Whether the responses are consistent.
-    """
+    """  # noqa: D205
     for (resp1, _), (resp2, _) in itertools.combinations(responses, 2):
         midp1 = resp1.signed_response.midpoint
         radi1 = resp1.signed_response.radius
@@ -212,7 +214,7 @@ def malfeasance_report(
         list[MalfeasanceReport]: The generated malfeasance report.
     """
     report: list[MalfeasanceReport] = []
-    for server, (response, rand) in zip(servers, responses):
+    for server, (response, rand) in zip(servers, responses, strict=True):
         report.append(
             {
                 "rand": base64.b64encode(rand).decode("utf-8"),

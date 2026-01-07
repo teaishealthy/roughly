@@ -1,6 +1,6 @@
 # roughly
 
-![Ruff logo](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/teaishealthy/teaishealthy/refs/heads/main/ruff-badge.json&style=flat-square)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/teaishealthy/teaishealthy/refs/heads/main/ruff-badge.json&style=flat-square)](https://github.com/astral-sh/ruff)
 ![WIP](https://img.shields.io/badge/status-WIP-red?style=flat-square)
 
 An asynchronous client library for the Roughtime protocol for Python.
