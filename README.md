@@ -14,9 +14,9 @@ Draft versions 07 through 15 are supported.
 You can install `roughly` from GitHub using your favorite package manager, for example with `pip`:
 
 ```bash
-pip install "git+https://github.tcom/teaishealthy/roughly.git"
+pip install "git+https://github.com/teaishealthy/roughly.git"
 # or with the cli extra
-pip install "git+https://github.tcom/teaishealthy/roughly.git#egg=project[cli]"
+pip install "git+https://github.com/teaishealthy/roughly.git#egg=project[cli]"
 ```
 
 ### As a CLI
