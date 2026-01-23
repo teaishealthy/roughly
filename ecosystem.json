@@ -95,6 +95,18 @@
           "address": "sth1.roughtime.netnod.se:2002"
         }
       ]
+    },
+    {
+      "name": "time.teax.dev",
+      "version": 2147483660,
+      "publicKeyType": "ed25519",
+      "publicKey": "84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "time.teax.dev:2002"
+        }
+      ]
     }
   ]
 }
