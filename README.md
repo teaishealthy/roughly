@@ -4,10 +4,10 @@
 [![Roughtime draft 07-15](https://img.shields.io/badge/draft%2007--15-darkviolet?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15)
 ![WIP](https://img.shields.io/badge/WIP-red?style=flat-square)
 
-An asynchronous client library for the Roughtime protocol for Python.
+An asynchronous library for the Roughtime protocol for Python.
 
 Implements the Roughtime protocol as described in https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15, aka "IETF-Roughtime".
-Draft versions 07 through 15 are supported.
+Draft versions 07 through 15 are supported for querying servers, and draft versions 13 through 15 are supported for running a server.
 
 ## Quickstart
 
@@ -21,6 +21,8 @@ pip install "git+https://github.com/teaishealthy/roughly.git#egg=project[cli]"
 ```
 
 ### As a CLI
+
+#### Querying
 
 You can use `roughly` as a command line tool to query Roughtime servers.
 Install `roughly` with the `cli` extra using your favorite CLI package manager, for example with `uv` (or `pipx`):
@@ -44,7 +46,29 @@ roughly ecosystem malfeasance
 roughly ecosystem state
 ```
 
+#### Running a server
+
+You can also run your own Roughtime server using `roughly`.
+
+First, generate a keypair:
+
+```bash
+roughly server keygen
+```
+This will output a .env file containing the server's private key.
+
+You can then run the server like so:
+
+```bash
+ROUGHLY_SERVER_PRIVATE_KEY="your_private_key_here" roughly -v server run
+```
+
+By default, the server will bind to `0.0.0.0:2002`. You can change this using the `--host` and `--port` flags.
+I recommend running the server with verbose logging enabled (`-v`), so you can see incoming requests and debug any issues.
+
 ### As a library
+
+#### Querying
 
 `roughly` can be used as an asynchronous library to query Roughtime servers from your own Python code.
 
@@ -84,6 +108,33 @@ if confirm_malfeasance(report):
     print("something scary is going on!")
     with open("malfeasance_report.json", "w") as f:
         json.dump(report, f, indent=2)
+```
+
+#### Running a server
+
+You can also programmatically run your own Roughtime server:
+
+```python
+import roughly
+import roughly.server
+
+config = roughly.server.Config.create() # generates a new keypair
+await roughly.server.serve(config)
+```
+
+Why? You can subclass `roughly.server.UDPHandler` and `roughly.server.Server` to implement custom behavior. Like a malfeasant server for testing:
+
+```python
+import roughly
+import roughly.server
+
+class ScaryServer(roughly.server.Server):
+    @staticmethod
+    def get_time() -> int:
+        # return a wrong-ish time
+        return int(time.time()) + random.randint(-3600, 3600)
+
+await roughly.server.serve(ScaryServer.create())
 ```
 
 ## Ecosystem

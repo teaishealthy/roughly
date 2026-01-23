@@ -41,6 +41,7 @@ ignore = [
     "D101", # missing docstring in public class
     "D102", # missing docstring in public method
     "D103", # missing docstring in public function
+    "D105", # missing docstring in magic method
     "D107", # missing docstring in __init__
 
     # disabled because of `ruff format`

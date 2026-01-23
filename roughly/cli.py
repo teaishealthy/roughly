@@ -11,6 +11,7 @@ import click
 
 import roughly
 import roughly.ecosystem
+import roughly.server
 
 # ruff: noqa: FBT001 FBT002 PLR0913
 
@@ -229,6 +230,81 @@ def malfeasance(always_write: bool, report_location: Path | None, ecosystem_path
             ecosystem_path=ecosystem_path,
         )
     )
+
+
+@cli.group()
+def server() -> None:
+    """Commands for running a Roughtime server."""
+
+
+@server.command(name="run")
+@click.option("--host", default="0.0.0.0", help="Host to bind to")  # noqa: S104
+@click.option("--port", "-p", default=2002, type=int, help="Port to bind to")
+@click.option(
+    "--private-key",
+    type=str,
+    help="Base64-encoded 32-byte Ed25519 private key. If not provided, generates a new key.",
+    envvar="ROUGHLY_PRIVATE_KEY",
+)
+@click.option(
+    "--radius",
+    default=3,
+    type=int,
+    help="Uncertainty radius in seconds",
+)
+@click.option(
+    "--validity-days",
+    default=30,
+    type=int,
+    help="Validity period for the delegated key in days",
+)
+def server_run(
+    host: str,
+    port: int,
+    private_key: str | None,
+    radius: int,
+    validity_days: int,
+) -> None:
+    """Run a Roughtime server."""
+    key_bytes = base64.b64decode(private_key) if private_key else None
+
+    config = roughly.server.Server.create(
+        key_bytes,
+        validity_seconds=validity_days * roughly.SECONDS_IN_A_DAY,
+        radius=radius,
+    )
+
+    pub_bytes = roughly.server.public_key_bytes(config.long_term_key)
+    public_key_b64 = base64.b64encode(pub_bytes).decode()
+    click.echo(f"Server public key (base64): {public_key_b64}")
+    click.echo(f"Starting Roughtime server on {host}:{port}")
+
+    try:
+        asyncio.run(roughly.server.serve(config, host, port))
+    except KeyboardInterrupt:
+        click.echo("\nServer stopped.")
+
+
+@server.command(name="keygen")
+def server_keygen() -> None:
+    """Generate a new Ed25519 key pair for the server."""
+    key = roughly.server.generate_key()
+    private_key_bytes = key.private_bytes_raw()
+    pub_key_bytes = roughly.server.public_key_bytes(key)
+    output_data = f"ROUGHLY_PRIVATE_KEY={base64.b64encode(private_key_bytes).decode()}"
+
+    path = Path(".env")
+    if path.exists() and not click.confirm(
+        "'.env' file already exists. Overwrite?", default=False, show_default=True
+    ):
+        click.echo("Aborting key generation.")
+        return
+
+    with path.open("w", encoding="utf-8") as f:
+        f.write(output_data + "\n")
+
+    click.echo(f"Public key (base64): {base64.b64encode(pub_key_bytes).decode()}")
+    click.echo(f"Private key saved to '{path}'. Keep it secret!")
 
 
 if __name__ == "__main__":
