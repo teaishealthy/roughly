@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from roughly import (
+    DRAFT_VERSION_ZERO,
     Response,
     RoughtimeError,
     VerificationError,
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 # Because Cloudflare's ecosystem file uses version strings instead of integers
 VERSION_LOOKUP: dict[str, int] = {
-    "IETF-Roughtime": 0x80000000 | 7,
+    "IETF-Roughtime": DRAFT_VERSION_ZERO | 7,
     "Google-Roughtime": 3000600613,
 }
 
