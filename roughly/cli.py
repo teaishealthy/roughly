@@ -253,24 +253,25 @@ def server() -> None:
     help="Uncertainty radius in seconds",
 )
 @click.option(
-    "--validity-days",
-    default=30,
+    "--validity-seconds",
+    default=None,
     type=int,
-    help="Validity period for the delegated key in days",
+    help="Validity period for the delegated key in seconds. "
+    "If not set, defaults to 3600 seconds (1 hour).",
 )
 def server_run(
     host: str,
     port: int,
     private_key: str | None,
     radius: int,
-    validity_days: int,
+    validity_seconds: int | None,
 ) -> None:
     """Run a Roughtime server."""
     key_bytes = base64.b64decode(private_key) if private_key else None
 
     config = roughly.server.Server.create(
         key_bytes,
-        validity_seconds=validity_days * roughly.SECONDS_IN_A_DAY,
+        validity_seconds=validity_seconds,
         radius=radius,
     )
 

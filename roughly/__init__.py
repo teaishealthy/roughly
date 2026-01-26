@@ -17,12 +17,17 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from roughly import tags
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
 PACKET_SIZE = 1024
 
 MJD_UNIX_EPOCH = 40587
 SECONDS_IN_A_DAY = 86400
+
+DRAFT_VERSION_ZERO = 0x80000000
+
+# the TYPE tag was introduced in draft-14
+TYPE_FIRST_VERSION = DRAFT_VERSION_ZERO | 14
 
 ROUGHTIM = 0x4D49544847554F52
 RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
@@ -56,11 +61,10 @@ class VerificationError(RoughtimeError):
 
 def build_supported_versions(start: int, end: int) -> tuple[int, ...]:
     # Build a tuple of supported Roughtime versions (inclusive of start and end)
-    versions = (1, *tuple(2147483648 | v for v in range(start, end + 1)))
-    return tuple(sorted(versions))
+    return tuple(sorted(DRAFT_VERSION_ZERO | v for v in range(start, end + 1)))
 
 
-VERSIONS_SUPPORTED = build_supported_versions(7, 15)
+VERSIONS_SUPPORTED = (1, *build_supported_versions(7, 15))
 
 
 class QueueDatagramProtocol(asyncio.DatagramProtocol):
@@ -314,18 +318,22 @@ class Packet:
         return cls(message=message)
 
 
-def pop_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> Tag:
-    result = find_by_predicate(tag_list, predicate)
+def pop_by_tag(tag_list: list[Tag], tag_value: int) -> Tag:
+    result = find_by_predicate(tag_list, lambda t: t.tag == tag_value)
     if result is not None:
         return tag_list.pop(result)
-    raise RoughtimeError("Tag not found matching predicate")
+    raise RoughtimeError(f"Tag {tag_value:#x} not found")
 
 
-def pop_by_predicate_optional(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> Tag | None:
-    result = find_by_predicate(tag_list, predicate)
+def pop_by_tag_optional(tag_list: list[Tag], tag_value: int) -> Tag | None:
+    result = find_by_predicate(tag_list, lambda t: t.tag == tag_value)
     if result is not None:
         return tag_list.pop(result)
     return None
+
+
+def format_versions(versions: Iterable[int]) -> str:
+    return ", ".join(f"{v:#x}" for v in versions)
 
 
 def find_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> int | None:
@@ -362,14 +370,15 @@ class SignedResponse:
     @classmethod
     def from_bytes(cls, data: bytes, *, draft7: bool = False) -> SignedResponse:
         message = Message.load(data)
-        radius_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.RADI)
-        midpoint_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.MIDP)
-        versions_tag = pop_by_predicate_optional(message.tags, lambda t: t.tag == tags.VERS)
-        version_tag = pop_by_predicate_optional(message.tags, lambda t: t.tag == tags.VER)
-        root_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.ROOT)
-
+        radius_tag = pop_by_tag(message.tags, tags.RADI)
+        midpoint_tag = pop_by_tag(message.tags, tags.MIDP)
+        versions_tag = pop_by_tag_optional(message.tags, tags.VERS)
+        version_tag = pop_by_tag_optional(message.tags, tags.VER)
+        root_tag = pop_by_tag(message.tags, tags.ROOT)
         (radius,) = struct.unpack("<I", radius_tag.value)
         (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
+
+        # VDIFF: draft-7 uses MJD for midpoint and radius in microseconds
         if draft7:
             midpoint = convert_mjd_to_unix(midpoint)
             # We lose a ton of precision here, but I don't really care about draft-7 that much
@@ -410,17 +419,18 @@ class Certificate:
     @classmethod
     def from_bytes(cls, data: bytes, *, draft7: bool = False) -> Certificate:
         message = Message.load(data)
-        dele_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.DELE)
+        dele_tag = pop_by_tag(message.tags, tags.DELE)
         dele_message = Message.load(dele_tag.value)
 
-        pubk_tag = pop_by_predicate(dele_message.tags, lambda t: t.tag == tags.PUBK)
-        mint_tag = pop_by_predicate(dele_message.tags, lambda t: t.tag == tags.MINT)
-        maxt_tag = pop_by_predicate(dele_message.tags, lambda t: t.tag == tags.MAXT)
+        pubk_tag = pop_by_tag(dele_message.tags, tags.PUBK)
+        mint_tag = pop_by_tag(dele_message.tags, tags.MINT)
+        maxt_tag = pop_by_tag(dele_message.tags, tags.MAXT)
 
         public_key = pubk_tag.value
         (min_time,) = struct.unpack("<Q", mint_tag.value)
         (max_time,) = struct.unpack("<Q", maxt_tag.value)
 
+        # VDIFF: draft-7 uses MJD for min_time and max_time
         if draft7:
             min_time = convert_mjd_to_unix(min_time)
             max_time = convert_mjd_to_unix(max_time)
@@ -432,7 +442,7 @@ class Certificate:
             max_time=max_time,
         )
 
-        signature_tag = pop_by_predicate(message.tags, lambda t: t.tag == tags.SIG)
+        signature_tag = pop_by_tag(message.tags, tags.SIG)
         signature = signature_tag.value
 
         return cls(delegation=delegation, signature=signature)
@@ -500,27 +510,28 @@ class Response:
         p = Packet.load(raw)
 
         tag_list = p.message.tags.copy()
-        sig = pop_by_predicate(tag_list, lambda t: t.tag == tags.SIG)
-        nonc = pop_by_predicate(tag_list, lambda t: t.tag == tags.NONC)
+        sig = pop_by_tag(tag_list, tags.SIG)
+        nonc = pop_by_tag(tag_list, tags.NONC)
 
-        type = pop_by_predicate_optional(tag_list, lambda t: t.tag == tags.TYPE)
+        type = pop_by_tag_optional(tag_list, tags.TYPE)
         if type is not None:
             (type,) = struct.unpack("<I", type.value)
 
             if type != tags.TYPE_RESPONSE:
                 raise PacketError(f"Expected TYPE_RESPONSE, got {type}")
 
-        path = pop_by_predicate(tag_list, lambda t: t.tag == tags.PATH)
-        srep = pop_by_predicate(tag_list, lambda t: t.tag == tags.SREP)
-        cert = pop_by_predicate(tag_list, lambda t: t.tag == tags.CERT)
-        indx = pop_by_predicate(tag_list, lambda t: t.tag == tags.INDX)
+        path = pop_by_tag(tag_list, tags.PATH)
+        srep = pop_by_tag(tag_list, tags.SREP)
+        cert = pop_by_tag(tag_list, tags.CERT)
+        indx = pop_by_tag(tag_list, tags.INDX)
 
+        # VDIFF: detect draft-7 for SignedResponse and Certificate parsing
         draft7 = False
-        maybe_ver = pop_by_predicate_optional(tag_list, lambda t: t.tag == tags.VER)
+        maybe_ver = pop_by_tag_optional(tag_list, tags.VER)
         if maybe_ver is not None:
             (maybe_ver,) = struct.unpack("<I", maybe_ver.value)
 
-            if maybe_ver == 0x80000000 + 7:
+            if maybe_ver == DRAFT_VERSION_ZERO | 7:
                 draft7 = True
 
         response = cls(
@@ -536,17 +547,20 @@ class Response:
             index=struct.unpack("<I", indx.value)[0],
         )
 
-        if response.version >= 0x80000000 + 14 and type is None:
+        # VDIFF: check TYPE tag presence for draft-14+
+        if response.version >= DRAFT_VERSION_ZERO | 14 and type is None:
             raise PacketError("TYPE tag missing in draft-14+ response")
 
         return response
 
     def _verify_merkle(self) -> bool:
         hasher = partial_sha512
-        if self.version <= 0x80000000 + 7:
+        # VDIFF: until draft-8: use sha512_256
+        if self.version <= DRAFT_VERSION_ZERO | 7:
             hasher = sha512_256
 
-        if self.version >= 0x80000000 + 12:
+        # VDIFF: until draft-12: leaves are built from nonce
+        if self.version >= DRAFT_VERSION_ZERO | 12:
             h = hasher(b"\x00" + self.request)
         else:
             h = hasher(b"\x00" + self.nonce)
@@ -560,12 +574,7 @@ class Response:
         return h == self.signed_response.root
 
     def verify(self, long_term_public_key_bytes: bytes) -> bool:
-        delegation_context_string = DELEGATION_CONTEXT_STRING
-
-        # what? the context string got changed in draft-8 through draft-11
-        # and then got changed back in draft-12
-        if 0x80000000 + 7 < self.version < 0x80000000 + 12:
-            delegation_context_string = DELEGATION_CONTEXT_STRING_OLD
+        delegation_context_string = pick_delegation_string(self.version)
 
         # 5.4. Validity of Response
 
@@ -609,3 +618,13 @@ class Response:
             ) from e
 
         return True
+
+
+def pick_delegation_string(version: int) -> bytes:
+    # VDIFF: what? the context string got changed in draft-8 through draft-11
+    # and then got changed back in draft-12
+    delegation_context_string = DELEGATION_CONTEXT_STRING
+
+    if DRAFT_VERSION_ZERO | 7 < version < DRAFT_VERSION_ZERO | 12:
+        delegation_context_string = DELEGATION_CONTEXT_STRING_OLD
+    return delegation_context_string
