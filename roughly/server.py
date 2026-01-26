@@ -347,7 +347,7 @@ def handle_batch(server: Server, requests: tuple[bytes]) -> list[bytes | None]:
 
             req.validate(ver)
 
-            if req.srv != expected:
+            if req.srv is not None and req.srv != expected:
                 parsed.append(None)
                 logger.debug("Dropped request with invalid SRV")
                 continue
