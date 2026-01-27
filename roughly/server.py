@@ -81,7 +81,7 @@ def srv_hash(key: ed25519.Ed25519PrivateKey) -> bytes:
     return partial_sha512(b"\xff" + public_key_bytes(key))
 
 
-def create_certificate(
+def create_certificate(  # noqa: PLR0913
     long_term_key: ed25519.Ed25519PrivateKey,
     delegated_key: ed25519.Ed25519PrivateKey,
     min_time: int,
@@ -326,7 +326,9 @@ def build_response(  # noqa: PLR0913
     # vroughtime clients expect no VER/VERS tags at all
     if version != GOOGLE_ROUGHTIME_SENTINEL:
         srep.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
-        srep.tags.append(Tag(tag=tags.VERS, value=b"".join(struct.pack("<I", v) for v in server.versions)))
+        srep.tags.append(
+            Tag(tag=tags.VERS, value=b"".join(struct.pack("<I", v) for v in server.versions))
+        )
 
     srep.tags.sort(key=lambda t: t.tag)
     srep_raw = srep.dump()
