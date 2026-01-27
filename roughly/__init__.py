@@ -322,7 +322,8 @@ def pop_by_tag(tag_list: list[Tag], tag_value: int) -> Tag:
     result = find_by_predicate(tag_list, lambda t: t.tag == tag_value)
     if result is not None:
         return tag_list.pop(result)
-    raise RoughtimeError(f"Tag {tag_value:#x} not found")
+    ascii_repr = tag_value.to_bytes(4, "little").decode("ascii", errors="replace")
+    raise RoughtimeError(f"Tag {ascii_repr} not found")
 
 
 def pop_by_tag_optional(tag_list: list[Tag], tag_value: int) -> Tag | None:
