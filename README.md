@@ -37,7 +37,7 @@ pipx install .[cli]
 Then you can query a Roughtime server like so:
 
 ```bash
-roughly query roughtime.se 2002 S3AzfZJ5CjSdkJ21ZJGbxqdYP/SoE8fXKY0+aicsehI=
+roughly query time.teax.dev 2002 84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg=
 ```
 
 Or run ecosystem queries (assuming you have an `ecosystem.json` file):
@@ -77,9 +77,9 @@ I recommend running the server with verbose logging enabled (`-v`), so you can s
 import roughly
 
 response = await roughly.send_request(
-    host="roughtime.se"
+    host="time.teax.dev",
     port=2002,
-    public_key=base64.b64decode(b"S3AzfZJ5CjSdkJ21ZJGbxqdYP/SoE8fXKY0+aicsehI="),
+    public_key=base64.b64decode(b"84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg=")
 )
 # Responses are always verified before being returned
 
@@ -149,13 +149,16 @@ If you know of any other Roughtime servers, run your own server, or have updated
 
 The interopability matrix of `roughly` against Roughtime servers looks like this:
 
-| Server                                                          |    |
-|-----------------------------------------------------------------|----|
+### Roughly as a client
+
+| Server | Result |
+|---|---:|
 | [butterfield](https://github.com/signalsforgranted/butterfield) | ✅ |
-| [cloudflare](https://github.com/cloudflare/roughtime)           | ✅ |
-| [pyroughtime](https://github.com/dansarie/pyroughtime)          | ✅ |
-| [roughenough](https://github.com/int08h/roughenough/)           | ⚠️ |
-| [roughtimed](https://github.com/dansarie/roughtimed)            | ✅ |
+| [cloudflare](https://github.com/cloudflare/roughtime) | ✅ |
+| [pyroughtime](https://github.com/dansarie/pyroughtime) | ✅ |
+| [roughenough](https://github.com/int08h/roughenough/) | ⚠️ |
+| [roughtimed](https://github.com/dansarie/roughtimed) | ✅ |
+| roughly | ✅ |
 
 ⚠️ `roughenough` only expects version `0x8000000c` and does not ignore unknown versions.
 Make sure to explicitly request only version `0x8000000c` when querying `roughenough` servers, i.e.:
@@ -166,6 +169,21 @@ await roughly.send_request(
     versions=(0x8000000c,),
 )
 ```
+
+### Roughly as a server
+
+| Client | Result |
+|---|---:|
+| cloudflare | ✅ |
+| craggy | ✅ |
+| node-roughtime | ❌ |
+| pyroughtime | ✅ |
+| roughenough | ❌ |
+| roughly | ✅ |
+| vroughtime | ❌ |
+
+
+
 
 ### draft-7
 
