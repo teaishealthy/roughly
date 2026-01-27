@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import os
@@ -297,10 +298,15 @@ class Packet:
     message: Message
     magic: int = ROUGHTIM
 
-    def dump(self) -> bytes:
+    def dump(self, *, google: bool = False) -> bytes:
         message_data = self.message.dump()
-        data = struct.pack("<Q", self.magic)
-        data += struct.pack("<I", len(message_data))
+        data = b""
+
+        # VDIFF: Google Roughtime clients omit the magic and length fields
+        if not google:
+            data += struct.pack("<Q", self.magic)
+            data += struct.pack("<I", len(message_data))
+
         data += message_data
         return data
 
@@ -308,6 +314,10 @@ class Packet:
     def load(cls, data: bytes) -> Packet:
         magic, msg_len = struct.unpack("<QI", data[:12])
         if magic != cls.magic:
+            # we might be interacting with Google Roughtime
+            with contextlib.suppress(PacketError):
+                return cls(message=Message.load(data))
+
             raise PacketError(f"Expected magic {cls.magic:#x}, got {magic:#x}")
 
         if len(data) < 12 + msg_len:
@@ -458,6 +468,12 @@ def partial_sha512(data: bytes) -> bytes:
 
 def sha512_256(data: bytes) -> bytes:
     digest = hashes.Hash(hashes.SHA512_256())
+    digest.update(data)
+    return digest.finalize()
+
+
+def sha512(data: bytes) -> bytes:
+    digest = hashes.Hash(hashes.SHA512())
     digest.update(data)
     return digest.finalize()
 

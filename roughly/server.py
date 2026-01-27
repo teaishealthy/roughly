@@ -25,14 +25,20 @@ from roughly import (
     partial_sha512,
     pop_by_tag,
     pop_by_tag_optional,
+    sha512,
     sha512_256,
     tags,
 )
 
 logger = logging.getLogger(__name__)
 
+# The actual value is not important, we just need a unique sentinel
+# that doesn't make sense semantically
+GOOGLE_ROUGHTIME_SENTINEL = int.from_bytes(b"Google Roughtime")
+
 NONCE_SIZE = 32
 VER_7_NONCE_SIZE = 64
+MAX_DRAFT_VERSION = 0xFFFFFFFF
 
 DEFAULT_RADIUS = int(os.environ.get("ROUGHLY_DEFAULT_RADIUS", "3"))
 CLIENT_VERSIONS_SUPPORTED = build_supported_versions(10, 15)
@@ -43,7 +49,20 @@ CERT_VALIDITY = 60 * 60  # 1 hour
 class CertificateStore(NamedTuple):
     old: bytes
     new: bytes
+    google: bytes
     expiry: int
+
+
+def draft_version_boundary(
+    version: int, *, start: int | None = None, end: int | None = None
+) -> int:
+    # check if a version is within the draft version range, if so check if its in the given bounds
+    # max for draft versions is 0xffffffff
+    if DRAFT_VERSION_ZERO < version < MAX_DRAFT_VERSION:
+        if start is not None and version < start:
+            return False
+        return not (end is not None and version > end)
+    return False
 
 
 def generate_key() -> ed25519.Ed25519PrivateKey:
@@ -68,8 +87,15 @@ def create_certificate(
     min_time: int,
     max_time: int,
     delegation_string: bytes,
+    *,
+    google: bool | None = None,
 ) -> bytes:
     """Create and sign a delegation certificate. Returns raw CERT message bytes."""
+    # VDIFF: Google Roughtime clients expect time in microseconds
+    if google:
+        min_time *= 1_000_000
+        max_time *= 1_000_000
+
     dele = Message(
         tags=[
             Tag(tag=tags.MINT, value=struct.pack("<Q", min_time)),
@@ -118,18 +144,20 @@ class Server(NamedTuple):
         now = cls.get_time()
         expiry = now + cert_validity_seconds
 
-        def make_cert(string: bytes) -> bytes:
+        def make_cert(string: bytes, *, google: bool | None = None) -> bytes:
             return create_certificate(
                 long_term,
                 delegated,
                 now,
                 expiry,
                 string,
+                google=google,
             )
 
         certificates = CertificateStore(
             old=make_cert(DELEGATION_CONTEXT_STRING_OLD),
             new=make_cert(DELEGATION_CONTEXT_STRING),
+            google=make_cert(DELEGATION_CONTEXT_STRING_OLD, google=True),
             expiry=expiry,
         )
 
@@ -165,8 +193,11 @@ class Request(NamedTuple):
         packet = Packet.load(data)
         tag_list = packet.message.tags.copy()
 
-        ver = pop_by_tag(tag_list, tags.VER)
-        versions = list(struct.unpack(f"<{len(ver.value) // 4}I", ver.value))
+        ver = pop_by_tag_optional(tag_list, tags.VER)
+        if ver:
+            versions = list(struct.unpack(f"<{len(ver.value) // 4}I", ver.value))
+        else:
+            versions = [GOOGLE_ROUGHTIME_SENTINEL]
 
         nonc = pop_by_tag(tag_list, tags.NONC)
 
@@ -188,16 +219,16 @@ class Request(NamedTuple):
         # VDIFF: Validate according to the Roughtime spec for a given version
 
         # VDIFF: TYPE tag introduced in draft-14
-        if version >= TYPE_FIRST_VERSION:
+        if draft_version_boundary(version, start=TYPE_FIRST_VERSION):
             if self.type is None:
                 raise PacketError(f"Missing TYPE for version {version}")
             if self.type != tags.TYPE_REQUEST:
                 raise PacketError(f"Invalid TYPE {self.type}, expected {tags.TYPE_REQUEST}")
 
-        # VDIFF: NONC size differs in draft-7
-        expected_nonce_size = NONCE_SIZE
-        if version == DRAFT_VERSION_ZERO | 7:
-            expected_nonce_size = VER_7_NONCE_SIZE
+        # VDIFF: NONC size differs in draft-8+
+        expected_nonce_size = VER_7_NONCE_SIZE
+        if draft_version_boundary(version, end=DRAFT_VERSION_ZERO | 7):
+            expected_nonce_size = NONCE_SIZE
 
         if len(self.nonce) != expected_nonce_size:
             raise PacketError(
@@ -206,6 +237,8 @@ class Request(NamedTuple):
 
 
 def select_version(client: list[int], server: tuple[int, ...]) -> int | None:
+    if GOOGLE_ROUGHTIME_SENTINEL in client:
+        return GOOGLE_ROUGHTIME_SENTINEL
     common = set(client) & set(server)
     return max(common) if common else None
 
@@ -218,11 +251,15 @@ def build_merkle_tree(
     if version <= DRAFT_VERSION_ZERO | 7:
         hasher = sha512_256
 
+    # VDIFF: Google Roughtime uses sha512 for leaves
+    if version == GOOGLE_ROUGHTIME_SENTINEL:
+        hasher = sha512
+
     leaves: list[bytes] = []
 
     # VDIFF: until draft-12: leaves are built from nonce, not full request
     for r in requests:
-        if version >= DRAFT_VERSION_ZERO | 12:
+        if draft_version_boundary(version, start=DRAFT_VERSION_ZERO | 12):
             h = hasher(b"\x00" + r.raw)
         else:
             h = hasher(b"\x00" + r.nonce)
@@ -272,24 +309,37 @@ def build_response(  # noqa: PLR0913
     # we could also be a good programmer and handle versions properly
     # but let's expect clients to be well-built :3
 
+    radius = server.radius
+    if version == GOOGLE_ROUGHTIME_SENTINEL:
+        # VDIFF: midpoint and radius are in microseconds for Google Roughtime
+        midpoint *= 1_000_000
+        radius *= 1_000_000
+
     srep = Message(
         tags=[
-            Tag(tag=tags.VER, value=struct.pack("<I", version)),
-            Tag(tag=tags.RADI, value=struct.pack("<I", server.radius)),
+            Tag(tag=tags.RADI, value=struct.pack("<I", radius)),
             Tag(tag=tags.MIDP, value=struct.pack("<Q", midpoint)),
             Tag(tag=tags.VERS, value=b"".join(struct.pack("<I", v) for v in server.versions)),
             Tag(tag=tags.ROOT, value=root),
         ]
     )
+    # VDIFF we can't pack GOOGLE_ROUGHTIME_SENTINEL as a u32
+    if version != GOOGLE_ROUGHTIME_SENTINEL:
+        srep.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
+
     srep.tags.sort(key=lambda t: t.tag)
     srep_raw = srep.dump()
 
     sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
 
     # VDIFF: in draft-8 throught draft-11, the old certificate format is used
+    # Google uses a different certificate format as well
     cert = server.certificates.new
     if DRAFT_VERSION_ZERO | 7 < version < DRAFT_VERSION_ZERO | 12:
         cert = server.certificates.old
+
+    if version == GOOGLE_ROUGHTIME_SENTINEL:
+        cert = server.certificates.google
 
     resp = Message(
         tags=[
@@ -307,7 +357,7 @@ def build_response(  # noqa: PLR0913
         resp.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
 
     resp.tags.sort(key=lambda t: t.tag)
-    return Packet(message=resp).dump()
+    return Packet(message=resp).dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
 
 
 def handle_request(server: Server, data: bytes) -> bytes | None:
@@ -365,16 +415,23 @@ def handle_batch(server: Server, requests: tuple[bytes]) -> list[bytes | None]:
     # why do you not see
     # that they are not bound to be free (of Any)?
 
-    valid_requests: tuple[Request]
-    valid_idx: tuple[int]
+    valid_requests: tuple[Request, ...] = ()
+    valid_idx: tuple[int, ...] = ()
 
-    valid_requests, valid_idx = zip(*((p, i) for i, p in enumerate(parsed) if p), strict=False)
-
-    if not valid_idx:
+    pairs = [(p, i) for i, p in enumerate(parsed) if p]
+    if pairs:
+        valid_requests, valid_idx = zip(*((p, i) for i, p in enumerate(parsed) if p), strict=False)
+    else:
         return [None] * len(requests)
 
     # TODO(batching): see above comment
-    version = cast(int, select_version(valid_requests[0].versions, server.versions))
+    version = cast(
+        int,
+        select_version(
+            valid_requests[0].versions,
+            server.versions,
+        ),
+    )
 
     # we can safely drop failed requests here, i think
     root, levels = build_merkle_tree(version, valid_requests)
@@ -454,7 +511,10 @@ async def serve(
         lambda: handler(server), local_addr=(host, port)
     )
     logger.info("Listening on %s:%d", host, port)
-    logger.debug("Running with supported versions: %s", format_versions(server.versions))
+    logger.debug(
+        "Running with supported versions: %s + Google Roughtime", format_versions(server.versions)
+    )
+
     try:
         await asyncio.Event().wait()
     finally:
