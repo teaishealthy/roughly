@@ -8,7 +8,7 @@ An asynchronous library for the Roughtime protocol for Python.
 
 Implements the Roughtime protocol as described in https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15.
 
-Draft versions 07 through 15 are supported for querying servers, and draft versions 10 through 15 are supported for running a server.
+Draft versions 07 through 15 are supported for querying servers, and draft versions 10 through 15 are supported for running a server. Assuming the clients/servers properly ignore unknown fields.
 
 ## Quickstart
 
