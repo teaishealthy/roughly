@@ -423,12 +423,16 @@ class UDPHandler(asyncio.DatagramProtocol):
         host, port, *_ = addr
 
         logger.debug("Received datagram from %s:%d", host, port)
-        resp = handle_request(self.server, data)
-        if resp and self.transport:
-            self.transport.sendto(resp, addr)
-            logger.debug("Sent response to %s:%d", host, port)
-        else:
-            logger.debug("No response sent to %s:%d", host, port)
+        try:
+            resp = handle_request(self.server, data)
+
+            if resp and self.transport:
+                self.transport.sendto(resp, addr)
+                logger.debug("Sent response to %s:%d", host, port)
+            else:
+                logger.debug("No response sent to %s:%d", host, port)
+        except Exception:
+            logger.exception("Error handling request from %s:%d", host, port)
 
 
 async def serve(
