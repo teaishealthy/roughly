@@ -2,7 +2,7 @@ import roughly
 import roughly.server
 
 
-def test_server_and_client() -> None
+def test_server_and_client() -> None:
     server = roughly.server.Server.create()
     public_key = server.long_term_key.public_key().public_bytes_raw()
 
