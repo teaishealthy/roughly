@@ -178,11 +178,11 @@ await roughly.send_request(
 |---|---:|
 | cloudflare | ✅ |
 | craggy | ✅ |
-| node-roughtime | ❌ |
+| node-roughtime | ✅ |
 | pyroughtime | ✅ |
 | roughenough | ❌ |
 | roughly | ✅ |
-| vroughtime | ❌ |
+| vroughtime | ✅ |
 
 
 
