@@ -13,7 +13,11 @@ cli = ["click>=8.3.1"]
 roughly = "roughly.cli:cli"
 
 [dependency-groups]
-dev = ["ruff>=0.14.10"]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.10",
+]
 
 [tool.ruff]
 include = ["roughly/*"]
