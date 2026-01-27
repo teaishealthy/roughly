@@ -227,7 +227,7 @@ class Request(NamedTuple):
 
         # VDIFF: NONC size differs in draft-8+
         expected_nonce_size = VER_7_NONCE_SIZE
-        if draft_version_boundary(version, end=DRAFT_VERSION_ZERO | 7):
+        if draft_version_boundary(version, start=DRAFT_VERSION_ZERO | 7):
             expected_nonce_size = NONCE_SIZE
 
         if len(self.nonce) != expected_nonce_size:
@@ -319,13 +319,14 @@ def build_response(  # noqa: PLR0913
         tags=[
             Tag(tag=tags.RADI, value=struct.pack("<I", radius)),
             Tag(tag=tags.MIDP, value=struct.pack("<Q", midpoint)),
-            Tag(tag=tags.VERS, value=b"".join(struct.pack("<I", v) for v in server.versions)),
             Tag(tag=tags.ROOT, value=root),
         ]
     )
-    # VDIFF we can't pack GOOGLE_ROUGHTIME_SENTINEL as a u32
+    # VDIFF: we can't pack GOOGLE_ROUGHTIME_SENTINEL as a u32
+    # vroughtime clients expect no VER/VERS tags at all
     if version != GOOGLE_ROUGHTIME_SENTINEL:
         srep.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
+        srep.tags.append(Tag(tag=tags.VERS, value=b"".join(struct.pack("<I", v) for v in server.versions)))
 
     srep.tags.sort(key=lambda t: t.tag)
     srep_raw = srep.dump()
@@ -345,13 +346,15 @@ def build_response(  # noqa: PLR0913
         tags=[
             Tag(tag=tags.SIG, value=sig),
             Tag(tag=tags.NONC, value=nonce),
-            Tag(tag=tags.TYPE, value=struct.pack("<I", tags.TYPE_RESPONSE)),
             Tag(tag=tags.PATH, value=b"".join(path)),
             Tag(tag=tags.SREP, value=srep_raw),
             Tag(tag=tags.CERT, value=cert),
             Tag(tag=tags.INDX, value=struct.pack("<I", index)),
         ]
     )
+    # VDIFF: vroughtime issue
+    if version != GOOGLE_ROUGHTIME_SENTINEL:
+        resp.tags.append(Tag(tag=tags.TYPE, value=struct.pack("<I", tags.TYPE_RESPONSE)))
 
     if version <= DRAFT_VERSION_ZERO | 11:
         resp.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
