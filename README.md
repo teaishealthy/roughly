@@ -1,6 +1,8 @@
 # roughly
 
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/teaishealthy/teaishealthy/refs/heads/main/ruff-badge.json&style=flat-square)](https://github.com/astral-sh/ruff)\
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/teaishealthy/teaishealthy/refs/heads/main/ruff-badge.json&style=flat-square)](https://github.com/astral-sh/ruff)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/teaishealthy/roughly/tests.yml?style=flat-square&label=tests)
+![Coveralls](https://img.shields.io/coverallsCoverage/github/teaishealthy/roughly?style=flat-square)
 [![Roughtime draft 07-15](https://img.shields.io/badge/draft%2007--15-f2d3ff?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15)
 ![WIP](https://img.shields.io/badge/WIP-ffb1b1?style=flat-square)
 
