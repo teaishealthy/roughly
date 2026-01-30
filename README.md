@@ -123,8 +123,8 @@ You can also programmatically run your own Roughtime server:
 import roughly
 import roughly.server
 
-config = roughly.server.Config.create() # generates a new keypair
-await roughly.server.serve(config)
+server = roughly.server.Server.create() # generates a new keypair
+await roughly.server.serve(server)
 ```
 
 Why? You can subclass `roughly.server.UDPHandler` and `roughly.server.Server` to implement custom behavior. Like a malfeasant server for testing:
