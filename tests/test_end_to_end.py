@@ -1,17 +1,50 @@
+import base64
+import contextlib
+
+import pytest
+
 import roughly
+import roughly.ecosystem
 import roughly.server
 
+ROUGHLY_PRIVATE_KEY = base64.b64decode("Yhy96f0LvaDI9KSSYs5RMSs1+gPw3EkQeXPU/UBV5es=")
+SERVER = roughly.ecosystem.Server.from_dict(
+    {
+        "name": "localhost",
+        "version": max(roughly.server.CLIENT_VERSIONS_SUPPORTED),
+        "publicKeyType": "ed25519",
+        "publicKey": "eEBQPwhCxHJ2nJNra33/dGOuUx4VxUFwwROiw4RQ67Q=",
+        "addresses": [{"protocol": "udp", "address": "127.0.0.1:2002"}],
+    }
+)
 
-def test_server_and_client() -> None:
-    server = roughly.server.Server.create()
-    public_key = server.long_term_key.public_key().public_bytes_raw()
 
-    p = roughly.build_request()
-    payload = p.dump()
+@contextlib.asynccontextmanager
+async def run_server():
+    server = roughly.server.Server.create(private_key=ROUGHLY_PRIVATE_KEY)
 
-    raw_response = roughly.server.handle_request(server, payload)
+    transport = await roughly.server._start_server(  # pyright: ignore[reportPrivateUsage]
+        server, host="127.0.0.1", port=2002, handler=roughly.server.UDPHandler
+    )
 
-    assert raw_response is not None
+    try:
+        yield
+    finally:
+        transport.close()
 
-    response = roughly.Response.from_packet(raw=raw_response, request=payload)
-    response.verify(public_key)
+
+@pytest.mark.asyncio
+async def test_server_and_client() -> None:
+    async with run_server():
+        await roughly.send_request("127.0.0.1", 2002, SERVER.public_key)
+
+
+@pytest.mark.asyncio
+async def test_ecosystem() -> None:
+    async with run_server():
+        selected_servers = await roughly.ecosystem.pick_servers([SERVER])
+        responses = await roughly.ecosystem.query_servers(selected_servers)
+        report = roughly.ecosystem.malfeasance_report(responses, selected_servers)
+
+        if roughly.ecosystem.confirm_malfeasance(report):
+            raise RuntimeError("Malfeasance confirmed in test_ecosystem")

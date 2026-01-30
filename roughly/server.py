@@ -511,7 +511,25 @@ async def serve(
         host (str, optional): The host to bind to. Defaults to "0.0.0.0"
         handler (type[UDPHandler], optional): The UDP handler class to use. Defaults to UDPHandler.
     """
-    loop = asyncio.get_running_loop()
+    transport = await _start_server(server, host, port, handler)
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        transport.close()
+
+
+async def _start_server(
+    server: Server,
+    host: str,
+    port: int,
+    handler: type[UDPHandler],
+    *,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> asyncio.DatagramTransport:
+    if not loop:
+        loop = asyncio.get_running_loop()
+
     transport, _ = await loop.create_datagram_endpoint(
         lambda: handler(server), local_addr=(host, port)
     )
@@ -520,7 +538,4 @@ async def serve(
         "Running with supported versions: %s + Google Roughtime", format_versions(server.versions)
     )
 
-    try:
-        await asyncio.Event().wait()
-    finally:
-        transport.close()
+    return transport
