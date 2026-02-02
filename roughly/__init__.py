@@ -210,14 +210,7 @@ class Message:
 
         value_blobs: list[bytes] = []
         for tag in self.tags:
-            if isinstance(tag.value, int):
-                val_data = struct.pack("<I", tag.value)
-            elif isinstance(tag.value, bytes):
-                val_data = tag.value
-            elif isinstance(tag.value, Message):
-                val_data = tag.value.dump()
-            else:
-                raise FormatError("Unsupported tag value type")
+            val_data = tag.value
 
             if len(val_data) % 4 != 0:
                 raise FormatError(
