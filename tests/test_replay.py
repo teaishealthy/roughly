@@ -3,6 +3,7 @@ import itertools
 import json
 import operator
 import pathlib
+from collections.abc import Iterable
 from typing import TypedDict
 
 import pytest
@@ -19,6 +20,12 @@ DRAFT_7_PUB_KEY = base64.b64decode("T/xxX4ERUBAOpt64Z8phWamKsASZxJ0VWuiPm3GS/8g=
 CLIENT = 1
 SERVER = 0
 
+NESTED_TAGS: list[tuple[tuple[int, ...], int]] = [
+    ((), roughly.tags.SREP),
+    ((), roughly.tags.CERT),
+    ((roughly.tags.CERT,), roughly.tags.DELE),
+]
+
 
 class PartialPacketEntry(TypedDict):
     request: bytes
@@ -31,6 +38,17 @@ class PacketEntry(PartialPacketEntry):
     response: bytes
     other: str  # other party's name
 
+
+def get_tags(message: roughly.Message) -> set[int]:
+    return {tag.tag for tag in message.tags}
+
+def get_nested_message(message: roughly.Message, path: Iterable[int]) -> roughly.Message:
+    for tag_id in path:
+        for tag in message.tags:
+            if tag.tag == tag_id:
+                message = roughly.Message.from_bytes(tag.value)
+                break
+    return message
 
 def decode_packet(packet: PacketEntry) -> PartialPacketEntry:
     request = base64.b64decode(packet["request"])
@@ -81,3 +99,24 @@ def test_replay_server(packet: PacketEntry) -> None:
     if version != roughly.server.GOOGLE_ROUGHTIME_SENTINEL:
         resp = roughly.VerifiableResponse.from_packet(raw=responses[0], request=packet["request"])
         resp.verify(PUBLIC_KEY)
+
+    original_packet = roughly.Packet.from_bytes(packet["response"])
+    response_packet = roughly.Packet.from_bytes(responses[0])
+
+    assert get_tags(original_packet.message) <= get_tags(response_packet.message), (
+        "Missing top-level tags"
+    )
+
+    for path, tag_id in NESTED_TAGS:
+        original_parent = get_nested_message(original_packet.message, path)
+        generated_parent = get_nested_message(response_packet.message, path)
+
+        original_nested = get_nested_message(original_parent, [tag_id])
+        generated_nested = get_nested_message(generated_parent, [tag_id])
+
+        tag_name = tag_id.to_bytes(4, "little").decode("ascii", errors="replace")
+
+        assert get_tags(original_nested) <= get_tags(generated_nested), (
+            f"Missing {tag_name} tags"
+        )
+
