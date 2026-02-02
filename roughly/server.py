@@ -16,12 +16,16 @@ from roughly import (
     DELEGATION_CONTEXT_STRING,
     DELEGATION_CONTEXT_STRING_OLD,
     DRAFT_VERSION_ZERO,
+    GOOGLE_ROUGHTIME_SENTINEL,
     PACKET_SIZE,
     RESPONSE_CONTEXT_STRING,
     TYPE_FIRST_VERSION,
+    Certificate,
+    Delegation,
     Message,
     Packet,
     PacketError,
+    SignedResponse,
     Tag,
     build_supported_versions,
     format_versions,
@@ -35,9 +39,6 @@ from roughly import (
 
 logger = logging.getLogger(__name__)
 
-# The actual value is not important, we just need a unique sentinel
-# that doesn't make sense semantically
-GOOGLE_ROUGHTIME_SENTINEL = int.from_bytes(b"Google Roughtime")
 
 NONCE_SIZE = 32
 VER_7_NONCE_SIZE = 64
@@ -99,21 +100,16 @@ def create_certificate(  # noqa: PLR0913
         min_time *= 1_000_000
         max_time *= 1_000_000
 
-    dele = Message(
-        tags=[
-            Tag(tag=tags.MINT, value=struct.pack("<Q", min_time)),
-            Tag(tag=tags.MAXT, value=struct.pack("<Q", max_time)),
-            Tag(tag=tags.PUBK, value=public_key_bytes(delegated_key)),
-        ]
+    cert = Certificate.signed(
+        Delegation(
+            min_time=min_time,
+            max_time=max_time,
+            public_key=public_key_bytes(delegated_key),
+        ),
+        private_key=long_term_key,
+        context_string=delegation_string,
     )
-    dele.tags.sort(key=lambda t: t.tag)
-    dele_raw = dele.dump()
-
-    sig = long_term_key.sign(delegation_string + dele_raw)
-
-    cert = Message(tags=[Tag(tag=tags.DELE, value=dele_raw), Tag(tag=tags.SIG, value=sig)])
-    cert.tags.sort(key=lambda t: t.tag)
-    return cert.dump()
+    return cert.to_bytes()
 
 
 class Server(NamedTuple):
@@ -123,7 +119,7 @@ class Server(NamedTuple):
     certificates: CertificateStore
     validity_seconds: int | None
     radius: int
-    versions: Sequence[int]
+    versions: tuple[int, ...]
 
     @staticmethod
     def get_time() -> int:
@@ -170,7 +166,7 @@ class Server(NamedTuple):
             certificates=certificates,
             validity_seconds=validity_seconds,
             radius=radius,
-            versions=versions or CLIENT_VERSIONS_SUPPORTED,
+            versions=tuple(versions or CLIENT_VERSIONS_SUPPORTED),
         )
 
     def refresh(self) -> Server:
@@ -193,7 +189,7 @@ class Request(NamedTuple):
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Request:
-        packet = Packet.load(data)
+        packet = Packet.from_bytes(data)
         tag_list = packet.message.tags.copy()
 
         ver = pop_by_tag_optional(tag_list, tags.VER)
@@ -316,34 +312,45 @@ def build_response(  # noqa: PLR0913
         midpoint *= 1_000_000
         radius *= 1_000_000
 
-    srep = Message(
-        tags=[
-            Tag(tag=tags.RADI, value=struct.pack("<I", radius)),
-            Tag(tag=tags.MIDP, value=struct.pack("<Q", midpoint)),
-            Tag(tag=tags.ROOT, value=root),
-        ]
+    srep = SignedResponse(
+        radius=radius,
+        midpoint=midpoint,
+        root=root,
+        version=version,
+        versions=server.versions,
     )
-    # VDIFF: we can't pack GOOGLE_ROUGHTIME_SENTINEL as a u32
-    # vroughtime clients expect no VER/VERS tags at all
-    if version != GOOGLE_ROUGHTIME_SENTINEL:
-        srep.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
-        srep.tags.append(
-            Tag(tag=tags.VERS, value=b"".join(struct.pack("<I", v) for v in server.versions))
-        )
-
-    srep.tags.sort(key=lambda t: t.tag)
-    srep_raw = srep.dump()
-
-    sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
 
     # VDIFF: in draft-8 throught draft-11, the old certificate format is used
     # Google uses a different certificate format as well
-    cert = server.certificates.new
+    cert = pick_cert(
+        certificates=server.certificates,
+        version=version,
+    )
+
+    resp = make_response(server, nonce, version, path, index, srep, cert)
+    return Packet(message=resp).dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
+
+def pick_cert(*, certificates: CertificateStore, version: int) -> bytes:
+    cert = certificates.new
     if DRAFT_VERSION_ZERO | 7 < version < DRAFT_VERSION_ZERO | 12:
-        cert = server.certificates.old
+        cert = certificates.old
 
     if version == GOOGLE_ROUGHTIME_SENTINEL:
-        cert = server.certificates.google
+        cert = certificates.google
+    return cert
+
+
+def make_response(  # noqa: PLR0913
+    server: Server,
+    nonce: bytes,
+    version: int,
+    path: list[bytes],
+    index: int,
+    srep: SignedResponse,
+    cert: bytes,
+) -> Message:
+    srep_raw = srep.to_bytes()
+    sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
 
     resp = Message(
         tags=[
@@ -363,7 +370,7 @@ def build_response(  # noqa: PLR0913
         resp.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
 
     resp.tags.sort(key=lambda t: t.tag)
-    return Packet(message=resp).dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
+    return resp
 
 
 def handle_request(server: Server, data: bytes) -> bytes | None:

@@ -9,7 +9,7 @@ import logging
 import os
 import struct
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 import cryptography.exceptions
 from cryptography.hazmat.primitives import hashes
@@ -34,6 +34,12 @@ ROUGHTIM = 0x4D49544847554F52
 RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
+
+# The actual value is not important, we just need a unique sentinel
+# that doesn't make sense semantically
+GOOGLE_ROUGHTIME_SENTINEL = int.from_bytes(b"Google Roughtime")
+
+T = TypeVar("T")
 
 RoughtimeErrorReason = Literal["merkle", "key-age", "signature-certificate", "signature-response"]
 
@@ -66,6 +72,12 @@ def build_supported_versions(start: int, end: int) -> tuple[int, ...]:
 
 
 VERSIONS_SUPPORTED = (1, *build_supported_versions(7, 15))
+
+
+def always(x: T | None) -> T:  # noqa: UP047
+    if x is None:
+        raise RuntimeError("Expected non-None value")
+    return x
 
 
 class QueueDatagramProtocol(asyncio.DatagramProtocol):
@@ -203,7 +215,7 @@ class Message:
             tag_ascii = tag.tag.to_bytes(4, "little").decode("ascii", errors="replace")
             print(f"Tag {tag_ascii}: {tag.value}")  # noqa: T201
 
-    def dump(self) -> bytes:
+    def to_bytes(self) -> bytes:
         num_pairs = len(self.tags)
         if num_pairs == 0:
             raise FormatError("Message must contain at least one tag")
@@ -242,7 +254,7 @@ class Message:
 
     def zzzz(self) -> None:
         # fill the message with a ZZZZ tag to pad until 1024 bytes
-        current_size = len(self.dump())
+        current_size = len(self.to_bytes())
         if current_size >= PACKET_SIZE:
             return  # already at or above 1024 bytes
 
@@ -255,7 +267,7 @@ class Message:
         zzzz_tag.value = b"\x00" * zlen
 
     @classmethod
-    def load(cls, data: bytes) -> Message:
+    def from_bytes(cls, data: bytes) -> Message:
         reader = io.BytesIO(data)
         (num_pairs,) = struct.unpack("<I", reader.read(4))
         if num_pairs == 0:
@@ -292,7 +304,7 @@ class Packet:
     magic: int = ROUGHTIM
 
     def dump(self, *, google: bool = False) -> bytes:
-        message_data = self.message.dump()
+        message_data = self.message.to_bytes()
         data = b""
 
         # VDIFF: Google Roughtime clients omit the magic and length fields
@@ -304,12 +316,12 @@ class Packet:
         return data
 
     @classmethod
-    def load(cls, data: bytes) -> Packet:
+    def from_bytes(cls, data: bytes) -> Packet:
         magic, msg_len = struct.unpack("<QI", data[:12])
         if magic != cls.magic:
             # we might be interacting with Google Roughtime
             with contextlib.suppress(PacketError):
-                return cls(message=Message.load(data))
+                return cls(message=Message.from_bytes(data))
 
             raise PacketError(f"Expected magic {cls.magic:#x}, got {magic:#x}")
 
@@ -317,7 +329,7 @@ class Packet:
             raise PacketError("Packet data is shorter than declared message length")
 
         msg_data = data[12 : 12 + msg_len]
-        message = Message.load(msg_data)
+        message = Message.from_bytes(msg_data)
         return cls(message=message)
 
 
@@ -365,8 +377,6 @@ def microseconds_to_seconds(microseconds: int) -> int:
 
 @dataclass
 class SignedResponse:
-    raw: bytes
-
     radius: int
     midpoint: int
     version: int
@@ -375,7 +385,7 @@ class SignedResponse:
 
     @classmethod
     def from_bytes(cls, data: bytes, *, draft7: bool = False) -> SignedResponse:
-        message = Message.load(data)
+        message = Message.from_bytes(data)
         radius_tag = pop_by_tag(message.tags, tags.RADI)
         midpoint_tag = pop_by_tag(message.tags, tags.MIDP)
         versions_tag = pop_by_tag_optional(message.tags, tags.VERS)
@@ -400,7 +410,6 @@ class SignedResponse:
         root = root_tag.value
 
         return cls(
-            raw=data,
             radius=radius,
             midpoint=midpoint,
             versions=versions,
@@ -408,25 +417,35 @@ class SignedResponse:
             root=root,
         )
 
+    def to_bytes(self) -> bytes:
+        message = Message(
+            tags=[
+                Tag(tag=tags.RADI, value=struct.pack("<I", self.radius)),
+                Tag(tag=tags.MIDP, value=struct.pack("<Q", self.midpoint)),
+                Tag(tag=tags.ROOT, value=self.root),
+            ]
+        )
+        # VDIFF: we can't pack GOOGLE_ROUGHTIME_SENTINEL as a u32
+        # vroughtime clients expect no VER/VERS tags at all
+        if self.version != GOOGLE_ROUGHTIME_SENTINEL:
+            message.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", self.version)))
+            message.tags.append(
+                Tag(tag=tags.VERS, value=b"".join(struct.pack("<I", v) for v in self.versions))
+            )
+
+        message.tags.sort(key=lambda t: t.tag)
+        return message.to_bytes()
+
 
 @dataclass
 class Delegation:
-    raw: bytes
     public_key: bytes
     min_time: int
     max_time: int
 
-
-@dataclass
-class Certificate:
-    delegation: Delegation
-    signature: bytes
-
     @classmethod
-    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> Certificate:
-        message = Message.load(data)
-        dele_tag = pop_by_tag(message.tags, tags.DELE)
-        dele_message = Message.load(dele_tag.value)
+    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> Delegation:
+        dele_message = Message.from_bytes(data)
 
         pubk_tag = pop_by_tag(dele_message.tags, tags.PUBK)
         mint_tag = pop_by_tag(dele_message.tags, tags.MINT)
@@ -441,17 +460,61 @@ class Certificate:
             min_time = convert_mjd_to_unix(min_time)
             max_time = convert_mjd_to_unix(max_time)
 
-        delegation = Delegation(
-            raw=dele_tag.value,
+        return cls(
             public_key=public_key,
             min_time=min_time,
             max_time=max_time,
         )
 
+    def to_bytes(self) -> bytes:
+        message = Message(
+            tags=[
+                Tag(tag=tags.PUBK, value=self.public_key),
+                Tag(tag=tags.MINT, value=struct.pack("<Q", self.min_time)),
+                Tag(tag=tags.MAXT, value=struct.pack("<Q", self.max_time)),
+            ]
+        )
+        message.tags.sort(key=lambda t: t.tag)
+        return message.to_bytes()
+
+
+@dataclass
+class Certificate:
+    delegation: Delegation
+    signature: bytes
+
+    @classmethod
+    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> Certificate:
+        message = Message.from_bytes(data)
+        dele_tag = pop_by_tag(message.tags, tags.DELE)
+        delegation = Delegation.from_bytes(dele_tag.value, draft7=draft7)
+
         signature_tag = pop_by_tag(message.tags, tags.SIG)
         signature = signature_tag.value
 
         return cls(delegation=delegation, signature=signature)
+
+    @classmethod
+    def signed(
+        cls,
+        delegation: Delegation,
+        *,
+        private_key: ed25519.Ed25519PrivateKey,
+        context_string: bytes,
+    ) -> Certificate:
+        dele_bytes = delegation.to_bytes()
+        signature = private_key.sign(context_string + dele_bytes)
+        return cls(delegation=delegation, signature=signature)
+
+    def to_bytes(self) -> bytes:
+        message = Message(
+            tags=[
+                Tag(tag=tags.DELE, value=self.delegation.to_bytes()),
+                Tag(tag=tags.SIG, value=self.signature),
+            ]
+        )
+        message.tags.sort(key=lambda t: t.tag)
+        return message.to_bytes()
 
 
 def partial_sha512(data: bytes) -> bytes:
@@ -519,7 +582,7 @@ class Response:
 
     @classmethod
     def from_packet(cls, *, raw: bytes, request: bytes) -> Response:
-        p = Packet.load(raw)
+        p = Packet.from_bytes(raw)
 
         tag_list = p.message.tags.copy()
         sig = pop_by_tag(tag_list, tags.SIG)
@@ -595,9 +658,16 @@ class Response:
             long_term_public_key_bytes
         )
         try:
+            cert_idx = always(
+                find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.CERT)
+            )
+            cert_raw = self.packet.message.tags[cert_idx].value
+            cert_msg = Message.from_bytes(cert_raw)
+            dele_raw = pop_by_tag(cert_msg.tags, tags.DELE).value
+
             long_term_public_key.verify(
                 self.certificate.signature,
-                delegation_context_string + self.certificate.delegation.raw,
+                delegation_context_string + dele_raw,
             )
         except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
@@ -623,7 +693,12 @@ class Response:
             self.certificate.delegation.public_key
         )
         try:
-            public_key.verify(self.signature, RESPONSE_CONTEXT_STRING + self.signed_response.raw)
+            srep_idx = always(
+                find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.SREP)
+            )
+            srep_raw = self.packet.message.tags[srep_idx].value
+
+            public_key.verify(self.signature, RESPONSE_CONTEXT_STRING + srep_raw)
         except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
                 "Response signature invalid", reason="signature-response"
