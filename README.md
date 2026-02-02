@@ -6,7 +6,7 @@
 [![Roughtime draft 07-15](https://img.shields.io/badge/draft%2007--15-f2d3ff?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15)
 ![WIP](https://img.shields.io/badge/WIP-ffb1b1?style=flat-square)
 
-An asynchronous library for the Roughtime protocol for Python.
+An asynchronous implemenation of the Roughtime protocol for Python.
 
 Implements the Roughtime protocol as described in https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15.
 
