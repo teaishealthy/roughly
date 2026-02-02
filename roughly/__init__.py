@@ -123,7 +123,7 @@ async def send_request(
     *,
     versions: Iterable[int] | None = None,
     nonce: bytes | None = None,
-) -> Response:
+) -> VerifiableResponse:
     response = await very_dangerously_send_request_and_do_not_verify(
         host,
         port,
@@ -143,7 +143,7 @@ async def very_dangerously_send_request_and_do_not_verify(
     *,
     versions: Iterable[int] | None = None,
     nonce: bytes | None = None,
-) -> Response:
+) -> VerifiableResponse:
     """As should be clear from the function name, this function sends a Roughtime request
     but does NOT verify the response in any way. This is dangerous and should only be used
     if you REALLY know what you're doing."""  # noqa: D205 D209
@@ -164,7 +164,7 @@ async def very_dangerously_send_request_and_do_not_verify(
 
         data = await protocol.recv()
         logger.debug("Received %d bytes from %s:%d", len(data), host, port)
-        response = Response.from_packet(raw=data, request=payload)
+        response = VerifiableResponse.from_packet(raw=data, request=payload)
         logger.debug("Parsed (unverified) response from %s:%d", host, port)
     finally:
         transport.close()
@@ -538,14 +538,7 @@ def sha512(data: bytes) -> bytes:
 
 @dataclass
 class Response:
-    raw: bytes
-    """The raw bytes of the Roughtime response packet"""
-
-    request: bytes
-    """The raw bytes of Roughtime packet that triggered this response"""
-
-    packet: Packet
-    """The full Roughtime response packet"""
+    """Shared response data model for both client and server."""
 
     signature: bytes
     """The signature over the signed response"""
@@ -568,23 +561,44 @@ class Response:
     index: int
     """The index of the server in the Merkle tree."""
 
-    @property
-    def version(self) -> int:
-        """The version of the response."""
-        if not self.signed_response.version:
-            result = find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.VER)
-            if result is None:
-                raise PacketError("No VER tag found in response packet")
-            (version,) = struct.unpack("<I", self.packet.message.tags[result].value[:4])
-            return version
+    def to_message(self, *, version: int) -> Message:
+        """Serialize to a Roughtime message for sending."""
+        srep_raw = self.signed_response.to_bytes()
 
-        return self.signed_response.version
+        resp = Message(
+            tags=[
+                Tag(tag=tags.SIG, value=self.signature),
+                Tag(tag=tags.NONC, value=self.nonce),
+                Tag(tag=tags.PATH, value=b"".join(self.path)),
+                Tag(tag=tags.SREP, value=srep_raw),
+                Tag(tag=tags.CERT, value=self.certificate.to_bytes()),
+                Tag(tag=tags.INDX, value=struct.pack("<I", self.index)),
+            ]
+        )
+
+        # VDIFF: vroughtime issue
+        if version != GOOGLE_ROUGHTIME_SENTINEL:
+            resp.tags.append(Tag(tag=tags.TYPE, value=struct.pack("<I", tags.TYPE_RESPONSE)))
+
+        if version <= DRAFT_VERSION_ZERO | 11:
+            resp.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
+
+        resp.tags.sort(key=lambda t: t.tag)
+        return resp
 
     @classmethod
-    def from_packet(cls, *, raw: bytes, request: bytes) -> Response:
-        p = Packet.from_bytes(raw)
+    def from_message(
+        cls,
+        message: Message,
+        *,
+        draft7: bool = False,
+    ) -> tuple[Response, bytes, bytes]:
+        """Parse from a Roughtime message.
 
-        tag_list = p.message.tags.copy()
+        Returns the Response and the raw bytes of DELE and SREP tags
+        (needed for signature verification).
+        """
+        tag_list = message.tags.copy()
         sig = pop_by_tag(tag_list, tags.SIG)
         nonc = pop_by_tag(tag_list, tags.NONC)
 
@@ -600,19 +614,12 @@ class Response:
         cert = pop_by_tag(tag_list, tags.CERT)
         indx = pop_by_tag(tag_list, tags.INDX)
 
-        # VDIFF: detect draft-7 for SignedResponse and Certificate parsing
-        draft7 = False
-        maybe_ver = pop_by_tag_optional(tag_list, tags.VER)
-        if maybe_ver is not None:
-            (maybe_ver,) = struct.unpack("<I", maybe_ver.value)
-
-            if maybe_ver == DRAFT_VERSION_ZERO | 7:
-                draft7 = True
+        # Extract raw DELE bytes from CERT for signature verification
+        cert_msg = Message.from_bytes(cert.value)
+        dele_idx = always(find_by_predicate(cert_msg.tags, lambda t: t.tag == tags.DELE))
+        dele_raw = cert_msg.tags[dele_idx].value
 
         response = cls(
-            raw=raw,
-            request=request,
-            packet=p,
             signature=sig.value,
             nonce=nonc.value,
             type=type,
@@ -622,11 +629,74 @@ class Response:
             index=struct.unpack("<I", indx.value)[0],
         )
 
+        return response, dele_raw, srep.value
+
+
+@dataclass
+class VerifiableResponse(Response):
+    """Client-side response with verification context."""
+
+    raw: bytes
+    """The raw bytes of the Roughtime response packet"""
+
+    request: bytes
+    """The raw bytes of Roughtime packet that triggered this response"""
+
+    packet: Packet
+    """The full Roughtime response packet"""
+
+    dele_raw: bytes
+    """The raw DELE tag bytes for signature verification"""
+
+    srep_raw: bytes
+    """The raw SREP tag bytes for signature verification"""
+
+    @property
+    def version(self) -> int:
+        """The version of the response."""
+        if not self.signed_response.version:
+            result = find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.VER)
+            if result is None:
+                raise PacketError("No VER tag found in response packet")
+            (version,) = struct.unpack("<I", self.packet.message.tags[result].value[:4])
+            return version
+
+        return self.signed_response.version
+
+    @classmethod
+    def from_packet(cls, *, raw: bytes, request: bytes) -> VerifiableResponse:
+        p = Packet.from_bytes(raw)
+
+        # VDIFF: detect draft-7 for SignedResponse and Certificate parsing
+        draft7 = False
+        ver_result = find_by_predicate(p.message.tags, lambda t: t.tag == tags.VER)
+        if ver_result is not None:
+            (maybe_ver,) = struct.unpack("<I", p.message.tags[ver_result].value)
+            if maybe_ver == DRAFT_VERSION_ZERO | 7:
+                draft7 = True
+
+        response, dele_raw, srep_raw = Response.from_message(p.message, draft7=draft7)
+
+        verifiable = cls(
+            signature=response.signature,
+            nonce=response.nonce,
+            type=response.type,
+            path=response.path,
+            signed_response=response.signed_response,
+            certificate=response.certificate,
+            index=response.index,
+            raw=raw,
+            request=request,
+            packet=p,
+            dele_raw=dele_raw,
+            srep_raw=srep_raw,
+        )
+
         # VDIFF: check TYPE tag presence for draft-14+
-        if response.version >= DRAFT_VERSION_ZERO | 14 and type is None:
+        if verifiable.version >= DRAFT_VERSION_ZERO | 14 and response.type is None:
             raise PacketError("TYPE tag missing in draft-14+ response")
 
-        return response
+        return verifiable
 
     def _verify_merkle(self) -> bool:
         hasher = partial_sha512
@@ -658,16 +728,9 @@ class Response:
             long_term_public_key_bytes
         )
         try:
-            cert_idx = always(
-                find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.CERT)
-            )
-            cert_raw = self.packet.message.tags[cert_idx].value
-            cert_msg = Message.from_bytes(cert_raw)
-            dele_raw = pop_by_tag(cert_msg.tags, tags.DELE).value
-
             long_term_public_key.verify(
                 self.certificate.signature,
-                delegation_context_string + dele_raw,
+                delegation_context_string + self.dele_raw,
             )
         except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
@@ -693,12 +756,7 @@ class Response:
             self.certificate.delegation.public_key
         )
         try:
-            srep_idx = always(
-                find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.SREP)
-            )
-            srep_raw = self.packet.message.tags[srep_idx].value
-
-            public_key.verify(self.signature, RESPONSE_CONTEXT_STRING + srep_raw)
+            public_key.verify(self.signature, RESPONSE_CONTEXT_STRING + self.srep_raw)
         except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
                 "Response signature invalid", reason="signature-response"

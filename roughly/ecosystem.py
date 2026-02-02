@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from roughly import (
     DRAFT_VERSION_ZERO,
-    Response,
     RoughtimeError,
+    VerifiableResponse,
     VerificationError,
     partial_sha512,
     send_request,
@@ -98,7 +98,9 @@ def load_ecosystem(path: Path) -> list[Server]:
     return [Server.from_dict(item) for item in data["servers"]]
 
 
-async def _query_server(server: Server, *, timeout: float) -> tuple[Server, Response | None]:
+async def _query_server(
+    server: Server, *, timeout: float
+) -> tuple[Server, VerifiableResponse | None]:
     logger.debug(
         "Querying server %s at addresses: %s",
         server.name,
@@ -134,11 +136,11 @@ async def pick_servers(servers: Collection[Server], *, timeout: float = 1.0) -> 
     Returns:
         list[Server]: The selected servers for the query
     """
-    tasks: list[asyncio.Task[tuple[Server, Response | None]]] = []
+    tasks: list[asyncio.Task[tuple[Server, VerifiableResponse | None]]] = []
     for server in servers:
         tasks.append(asyncio.create_task(_query_server(server, timeout=timeout)))  # noqa: PERF401
 
-    results: list[tuple[Server, Response | None]] = await asyncio.gather(*tasks)
+    results: list[tuple[Server, VerifiableResponse | None]] = await asyncio.gather(*tasks)
 
     successful_servers: list[Server] = []
     for server, response in results:
@@ -150,7 +152,7 @@ async def pick_servers(servers: Collection[Server], *, timeout: float = 1.0) -> 
     return successful_servers
 
 
-async def query_servers(servers: Collection[Server]) -> list[tuple[Response, bytes]]:
+async def query_servers(servers: Collection[Server]) -> list[tuple[VerifiableResponse, bytes]]:
     """Query multiple Roughtime servers for a measurement sequence.
 
     Args:
@@ -160,11 +162,11 @@ async def query_servers(servers: Collection[Server]) -> list[tuple[Response, byt
         RoughtimeError: If querying any server fails.
 
     Returns:
-        list[tuple[Response, bytes]]: The responses and random bytes used for each query.
+        list[tuple[VerifiableResponse, bytes]]: The responses and random bytes used for each query.
     """
     logger.debug("Querying %d servers for measurement sequence", len(servers))
 
-    responses: list[tuple[Response, bytes]] = []
+    responses: list[tuple[VerifiableResponse, bytes]] = []
     rand = os.urandom(32)
     nonce = rand
 
@@ -192,13 +194,13 @@ async def query_servers(servers: Collection[Server]) -> list[tuple[Response, byt
 
 
 def responses_consistent(
-    responses: Iterable[tuple[Response, bytes]],
+    responses: Iterable[tuple[VerifiableResponse, bytes]],
 ) -> bool:
     """Check whether a set of Roughtime responses are consistent with each other.
     Only checks if the time intervals overlap.
 
     Args:
-        responses (Iterable[tuple[Response, bytes]]): The responses to check.
+        responses (Iterable[tuple[VerifiableResponse, bytes]]): The responses to check.
 
     Returns:
         bool: Whether the responses are consistent.
@@ -217,12 +219,12 @@ def responses_consistent(
 
 
 def malfeasance_report(
-    responses: Iterable[tuple[Response, bytes]], servers: Iterable[Server]
+    responses: Iterable[tuple[VerifiableResponse, bytes]], servers: Iterable[Server]
 ) -> list[MalfeasanceReport]:
     """Generate a malfeasance report from server responses. Does not check for malfeasance itself.
 
     Args:
-        responses (Iterable[tuple[Response, bytes]]): The responses from the servers.
+        responses (Iterable[tuple[VerifiableResponse, bytes]]): The responses from the servers.
         servers (Iterable[Server]): The servers that were queried.
 
     Returns:
@@ -255,7 +257,7 @@ def confirm_malfeasance(
     Returns:
         bool: Whether the malfeasance report indicates inconsistent responses.
     """
-    responses: list[tuple[Response, bytes]] = []
+    responses: list[tuple[VerifiableResponse, bytes]] = []
 
     for entry in report:
         rand = base64.b64decode(entry["rand"])
@@ -263,7 +265,7 @@ def confirm_malfeasance(
         response_bytes = base64.b64decode(entry["response"])
         public_key = base64.b64decode(entry["publicKey"])
 
-        response = Response.from_packet(
+        response = VerifiableResponse.from_packet(
             raw=response_bytes,
             request=request,
         )

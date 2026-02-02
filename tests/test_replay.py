@@ -53,7 +53,7 @@ PACKETS = {role: list(items) for role, items in itertools.groupby(load_packets()
 
 @pytest.mark.parametrize("packet", PACKETS[CLIENT], ids=lambda p: f"client-{p['other']}")
 def test_replay_client(packet: PacketEntry) -> None:
-    resp = roughly.Response.from_packet(raw=packet["response"], request=packet["request"])
+    resp = roughly.VerifiableResponse.from_packet(raw=packet["response"], request=packet["request"])
     if resp.version == roughly.DRAFT_VERSION_ZERO | 7:
         resp.verify(DRAFT_7_PUB_KEY)
     else:
@@ -79,5 +79,5 @@ def test_replay_server(packet: PacketEntry) -> None:
     # so we should be able to parse all responses except Google Roughtime
     # this test is slightly out of scope but it's a good sanity check
     if version != roughly.server.GOOGLE_ROUGHTIME_SENTINEL:
-        resp = roughly.Response.from_packet(raw=responses[0], request=packet["request"])
+        resp = roughly.VerifiableResponse.from_packet(raw=responses[0], request=packet["request"])
         resp.verify(PUBLIC_KEY)

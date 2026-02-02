@@ -25,8 +25,8 @@ from roughly import (
     Message,
     Packet,
     PacketError,
+    Response,
     SignedResponse,
-    Tag,
     build_supported_versions,
     format_versions,
     partial_sha512,
@@ -51,9 +51,9 @@ CERT_VALIDITY = 60 * 60  # 1 hour
 
 
 class CertificateStore(NamedTuple):
-    old: bytes
-    new: bytes
-    google: bytes
+    old: Certificate
+    new: Certificate
+    google: Certificate
     expiry: int
 
 
@@ -93,14 +93,14 @@ def create_certificate(  # noqa: PLR0913
     delegation_string: bytes,
     *,
     google: bool | None = None,
-) -> bytes:
-    """Create and sign a delegation certificate. Returns raw CERT message bytes."""
+) -> Certificate:
+    """Create and sign a delegation certificate."""
     # VDIFF: Google Roughtime clients expect time in microseconds
     if google:
         min_time *= 1_000_000
         max_time *= 1_000_000
 
-    cert = Certificate.signed(
+    return Certificate.signed(
         Delegation(
             min_time=min_time,
             max_time=max_time,
@@ -109,7 +109,6 @@ def create_certificate(  # noqa: PLR0913
         private_key=long_term_key,
         context_string=delegation_string,
     )
-    return cert.to_bytes()
 
 
 class Server(NamedTuple):
@@ -143,7 +142,7 @@ class Server(NamedTuple):
         now = cls.get_time()
         expiry = now + cert_validity_seconds
 
-        def make_cert(string: bytes, *, google: bool | None = None) -> bytes:
+        def make_cert(string: bytes, *, google: bool | None = None) -> Certificate:
             return create_certificate(
                 long_term,
                 delegated,
@@ -320,24 +319,20 @@ def build_response(  # noqa: PLR0913
         versions=server.versions,
     )
 
-    # VDIFF: in draft-8 throught draft-11, the old certificate format is used
+    # VDIFF: in draft-8 through draft-11, the old certificate format is used
     # Google uses a different certificate format as well
-    cert = pick_cert(
-        certificates=server.certificates,
-        version=version,
-    )
+    cert = pick_cert(certificates=server.certificates, version=version)
 
     resp = make_response(server, nonce, version, path, index, srep, cert)
     return Packet(message=resp).dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
 
-def pick_cert(*, certificates: CertificateStore, version: int) -> bytes:
-    cert = certificates.new
-    if DRAFT_VERSION_ZERO | 7 < version < DRAFT_VERSION_ZERO | 12:
-        cert = certificates.old
 
+def pick_cert(*, certificates: CertificateStore, version: int) -> Certificate:
     if version == GOOGLE_ROUGHTIME_SENTINEL:
-        cert = certificates.google
-    return cert
+        return certificates.google
+    if DRAFT_VERSION_ZERO | 7 < version < DRAFT_VERSION_ZERO | 12:
+        return certificates.old
+    return certificates.new
 
 
 def make_response(  # noqa: PLR0913
@@ -347,30 +342,22 @@ def make_response(  # noqa: PLR0913
     path: list[bytes],
     index: int,
     srep: SignedResponse,
-    cert: bytes,
+    cert: Certificate,
 ) -> Message:
     srep_raw = srep.to_bytes()
     sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
 
-    resp = Message(
-        tags=[
-            Tag(tag=tags.SIG, value=sig),
-            Tag(tag=tags.NONC, value=nonce),
-            Tag(tag=tags.PATH, value=b"".join(path)),
-            Tag(tag=tags.SREP, value=srep_raw),
-            Tag(tag=tags.CERT, value=cert),
-            Tag(tag=tags.INDX, value=struct.pack("<I", index)),
-        ]
+    response = Response(
+        signature=sig,
+        nonce=nonce,
+        type=tags.TYPE_RESPONSE if version != GOOGLE_ROUGHTIME_SENTINEL else None,
+        path=path,
+        signed_response=srep,
+        certificate=cert,
+        index=index,
     )
-    # VDIFF: vroughtime issue
-    if version != GOOGLE_ROUGHTIME_SENTINEL:
-        resp.tags.append(Tag(tag=tags.TYPE, value=struct.pack("<I", tags.TYPE_RESPONSE)))
 
-    if version <= DRAFT_VERSION_ZERO | 11:
-        resp.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
-
-    resp.tags.sort(key=lambda t: t.tag)
-    return resp
+    return response.to_message(version=version)
 
 
 def handle_request(server: Server, data: bytes) -> bytes | None:

@@ -39,14 +39,16 @@ def cli(verbose: bool) -> None:
         logging.basicConfig(level=logging.DEBUG)
 
 
-async def _query(host: str, port: int, public_key: bytes, *, timeout: float) -> roughly.Response:
+async def _query(
+    host: str, port: int, public_key: bytes, *, timeout: float
+) -> roughly.VerifiableResponse:
     async with asyncio.timeout(timeout):
         return await roughly.send_request(host, port, public_key)
 
 
 async def _very_dangerously_query(
     host: str, port: int, public_key: bytes | None, *, timeout: float
-) -> roughly.Response:
+) -> roughly.VerifiableResponse:
     async with asyncio.timeout(timeout):
         return await roughly.very_dangerously_send_request_and_do_not_verify(
             host,
@@ -144,7 +146,9 @@ async def _ecosystem_state(ecosystem_path: Path) -> None:
     for server in selected_servers:
         click.echo(f"- {server.name} ({server.version:#x})")
 
-    tasks: list[asyncio.Task[tuple[roughly.ecosystem.Server, roughly.Response | None]]] = []
+    tasks: list[
+        asyncio.Task[tuple[roughly.ecosystem.Server, roughly.VerifiableResponse | None]]
+    ] = []
 
     for server in selected_servers:
         task = asyncio.create_task(
