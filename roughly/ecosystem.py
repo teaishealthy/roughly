@@ -19,6 +19,7 @@ from roughly import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection, Iterable
     from pathlib import Path
 
 # Because Cloudflare's ecosystem file uses version strings instead of integers
@@ -123,11 +124,11 @@ async def _query_server(server: Server, *, timeout: float) -> tuple[Server, Resp
     return server, None
 
 
-async def pick_servers(servers: list[Server], *, timeout: float = 1.0) -> list[Server]:
+async def pick_servers(servers: Collection[Server], *, timeout: float = 1.0) -> list[Server]:
     """Pick candidates for an ecosystem query.
 
     Args:
-        servers (list[Server]): The servers to pick from.
+        servers (Collection[Server]): The servers to pick from.
         timeout (float, optional): The timeout for each server query. Defaults to 1.0.
 
     Returns:
@@ -149,11 +150,11 @@ async def pick_servers(servers: list[Server], *, timeout: float = 1.0) -> list[S
     return successful_servers
 
 
-async def query_servers(servers: list[Server]) -> list[tuple[Response, bytes]]:
+async def query_servers(servers: Collection[Server]) -> list[tuple[Response, bytes]]:
     """Query multiple Roughtime servers for a measurement sequence.
 
     Args:
-        servers (list[Server]): The servers to query.
+        servers (Collection[Server]): The servers to query.
 
     Raises:
         RoughtimeError: If querying any server fails.
@@ -191,13 +192,13 @@ async def query_servers(servers: list[Server]) -> list[tuple[Response, bytes]]:
 
 
 def responses_consistent(
-    responses: list[tuple[Response, bytes]],
+    responses: Iterable[tuple[Response, bytes]],
 ) -> bool:
     """Check whether a set of Roughtime responses are consistent with each other.
     Only checks if the time intervals overlap.
 
     Args:
-        responses (list[tuple[Response, bytes]]): The responses to check.
+        responses (Iterable[tuple[Response, bytes]]): The responses to check.
 
     Returns:
         bool: Whether the responses are consistent.
@@ -216,13 +217,13 @@ def responses_consistent(
 
 
 def malfeasance_report(
-    responses: list[tuple[Response, bytes]], servers: list[Server]
+    responses: Iterable[tuple[Response, bytes]], servers: Iterable[Server]
 ) -> list[MalfeasanceReport]:
     """Generate a malfeasance report from server responses. Does not check for malfeasance itself.
 
     Args:
-        responses (list[tuple[Response, bytes]]): The responses from the servers.
-        servers (list[Server]): The servers that were queried.
+        responses (Iterable[tuple[Response, bytes]]): The responses from the servers.
+        servers (Iterable[Server]): The servers that were queried.
 
     Returns:
         list[MalfeasanceReport]: The generated malfeasance report.
@@ -241,12 +242,12 @@ def malfeasance_report(
 
 
 def confirm_malfeasance(
-    report: list[MalfeasanceReport],
+    report: Iterable[MalfeasanceReport],
 ) -> bool:
     """Confirm whether a malfeasance report indicates inconsistent responses.
 
     Args:
-        report (list[MalfeasanceReport]): The malfeasance report to check.
+        report (Iterable[MalfeasanceReport]): The malfeasance report to check.
 
     Raises:
         BadReport: If the malfeasance report is invalid.

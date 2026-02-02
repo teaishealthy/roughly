@@ -5,9 +5,12 @@ import logging
 import os
 import struct
 import time
-from typing import NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from roughly import (
     DELEGATION_CONTEXT_STRING,
@@ -120,7 +123,7 @@ class Server(NamedTuple):
     certificates: CertificateStore
     validity_seconds: int | None
     radius: int
-    versions: tuple[int, ...]
+    versions: Sequence[int]
 
     @staticmethod
     def get_time() -> int:
@@ -133,7 +136,7 @@ class Server(NamedTuple):
         *,
         validity_seconds: int | None = None,
         radius: int = DEFAULT_RADIUS,
-        versions: tuple[int, ...] | None = None,
+        versions: Sequence[int] | None = None,
     ) -> Server:
         cert_validity_seconds = validity_seconds
         if cert_validity_seconds is None:
@@ -236,16 +239,14 @@ class Request(NamedTuple):
             )
 
 
-def select_version(client: list[int], server: tuple[int, ...]) -> int | None:
+def select_version(client: Sequence[int], server: Sequence[int]) -> int | None:
     if GOOGLE_ROUGHTIME_SENTINEL in client:
         return GOOGLE_ROUGHTIME_SENTINEL
     common = set(client) & set(server)
     return max(common) if common else None
 
 
-def build_merkle_tree(
-    version: int, requests: tuple[Request, ...]
-) -> tuple[bytes, list[list[bytes]]]:
+def build_merkle_tree(version: int, requests: Sequence[Request]) -> tuple[bytes, list[list[bytes]]]:
     # VDIFF: until draft-8: use sha512_256 for leaves
     hasher = partial_sha512
     if version <= DRAFT_VERSION_ZERO | 7:
@@ -369,7 +370,7 @@ def handle_request(server: Server, data: bytes) -> bytes | None:
     return handle_batch(server, (data,))[0]
 
 
-def handle_batch(server: Server, requests: tuple[bytes]) -> list[bytes | None]:
+def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None]:
     # TODO(batching): we need to ensure that a batch is compatible
     # i.e. having to pick different hashers would break the merkle tree
     # for now, we don't batch requests at all
@@ -420,8 +421,8 @@ def handle_batch(server: Server, requests: tuple[bytes]) -> list[bytes | None]:
     # why do you not see
     # that they are not bound to be free (of Any)?
 
-    valid_requests: tuple[Request, ...] = ()
-    valid_idx: tuple[int, ...] = ()
+    valid_requests: Sequence[Request] = ()
+    valid_idx: Sequence[int] = ()
 
     pairs = [(p, i) for i, p in enumerate(parsed) if p]
     if pairs:

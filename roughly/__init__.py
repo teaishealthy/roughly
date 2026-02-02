@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from roughly import tags
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, MutableSequence
 
 PACKET_SIZE = 1024
 
@@ -109,7 +109,7 @@ async def send_request(
     port: int,
     public_key: bytes,
     *,
-    versions: tuple[int, ...] | None = None,
+    versions: Iterable[int] | None = None,
     nonce: bytes | None = None,
 ) -> Response:
     response = await very_dangerously_send_request_and_do_not_verify(
@@ -129,7 +129,7 @@ async def very_dangerously_send_request_and_do_not_verify(
     port: int,
     public_key: bytes | None = None,
     *,
-    versions: tuple[int, ...] | None = None,
+    versions: Iterable[int] | None = None,
     nonce: bytes | None = None,
 ) -> Response:
     """As should be clear from the function name, this function sends a Roughtime request
@@ -161,7 +161,7 @@ async def very_dangerously_send_request_and_do_not_verify(
 
 
 def build_request(
-    versions: tuple[int, ...] | None = None,
+    versions: Iterable[int] | None = None,
     public_key: bytes | None = None,
     nonce: bytes | None = None,
 ) -> Packet:
@@ -321,7 +321,7 @@ class Packet:
         return cls(message=message)
 
 
-def pop_by_tag(tag_list: list[Tag], tag_value: int) -> Tag:
+def pop_by_tag(tag_list: MutableSequence[Tag], tag_value: int) -> Tag:
     result = find_by_predicate(tag_list, lambda t: t.tag == tag_value)
     if result is not None:
         return tag_list.pop(result)
@@ -329,7 +329,7 @@ def pop_by_tag(tag_list: list[Tag], tag_value: int) -> Tag:
     raise RoughtimeError(f"Tag {ascii_repr} not found")
 
 
-def pop_by_tag_optional(tag_list: list[Tag], tag_value: int) -> Tag | None:
+def pop_by_tag_optional(tag_list: MutableSequence[Tag], tag_value: int) -> Tag | None:
     result = find_by_predicate(tag_list, lambda t: t.tag == tag_value)
     if result is not None:
         return tag_list.pop(result)
@@ -340,7 +340,9 @@ def format_versions(versions: Iterable[int]) -> str:
     return ", ".join(f"{v:#x}" for v in versions)
 
 
-def find_by_predicate(tag_list: list[Tag], predicate: Callable[[Tag], bool]) -> int | None:
+def find_by_predicate(
+    tag_list: MutableSequence[Tag], predicate: Callable[[Tag], bool]
+) -> int | None:
     for i, tag in enumerate(tag_list):
         if predicate(tag):
             return i
