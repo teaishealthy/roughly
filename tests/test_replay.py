@@ -13,6 +13,9 @@ import roughly.server
 PRIVATE_KEY = base64.b64decode("BuXi3Chpe7Nj3gCXavLUIoGbxngyrWVa3pYIHswbzbU=")
 PUBLIC_KEY = base64.b64decode("Ixu7gqjJ9TU6IxsO8wxZxAFT5te6FcZZQq5vXFl35JE=")
 
+# this is the public key from sth2.roughtime.netnod.se
+DRAFT_7_PUB_KEY = base64.b64decode("T/xxX4ERUBAOpt64Z8phWamKsASZxJ0VWuiPm3GS/8g=")
+
 CLIENT = 1
 SERVER = 0
 
@@ -51,7 +54,10 @@ PACKETS = {role: list(items) for role, items in itertools.groupby(load_packets()
 @pytest.mark.parametrize("packet", PACKETS[CLIENT], ids=lambda p: f"client-{p['other']}")
 def test_replay_client(packet: PacketEntry) -> None:
     resp = roughly.Response.from_packet(raw=packet["response"], request=packet["request"])
-    resp.verify(PUBLIC_KEY)
+    if resp.version == roughly.DRAFT_VERSION_ZERO | 7:
+        resp.verify(DRAFT_7_PUB_KEY)
+    else:
+        resp.verify(PUBLIC_KEY)
 
 
 @pytest.mark.parametrize("packet", PACKETS[SERVER], ids=lambda p: f"server-{p['other']}")
