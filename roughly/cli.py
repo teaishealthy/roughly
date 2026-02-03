@@ -263,12 +263,29 @@ def server() -> None:
     help="Validity period for the delegated key in seconds. "
     "If not set, defaults to 3600 seconds (1 hour).",
 )
+@click.option(
+    "--no-grease",
+    is_flag=True,
+    help="Disable response greasing",
+    envvar="ROUGHLY_NO_GREASE",
+)
+@click.option(
+    "--grease-probability",
+    default=None,
+    type=float,
+    help="Probability of greasing responses (between 0.0 and 1.0). "
+    f"If not set, defaults to {roughly.server.GREASE_PROBABILITY} "
+    f"({roughly.server.GREASE_PROBABILITY * 100:.2f}%).",
+    envvar="ROUGHLY_GREASE_PROBABILITY",
+)
 def server_run(
     host: str,
     port: int,
     private_key: str | None,
     radius: int,
     validity_seconds: int | None,
+    no_grease: bool,
+    grease_probability: float | None,
 ) -> None:
     """Run a Roughtime server."""
     key_bytes = base64.b64decode(private_key) if private_key else None
@@ -277,6 +294,8 @@ def server_run(
         key_bytes,
         validity_seconds=validity_seconds,
         radius=radius,
+        grease=not no_grease,
+        grease_probability=grease_probability,
     )
 
     pub_bytes = roughly.server.public_key_bytes(config.long_term_key)

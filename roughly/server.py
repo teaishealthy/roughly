@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import string
 import struct
 import time
-from typing import TYPE_CHECKING, NamedTuple, cast
+from random import SystemRandom
+from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 from roughly import (
     DELEGATION_CONTEXT_STRING,
@@ -27,6 +29,7 @@ from roughly import (
     PacketError,
     Response,
     SignedResponse,
+    Tag,
     build_supported_versions,
     format_versions,
     partial_sha512,
@@ -37,17 +40,69 @@ from roughly import (
     tags,
 )
 
+random = SystemRandom()
+
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
 
 NONCE_SIZE = 32
 VER_7_NONCE_SIZE = 64
 MAX_DRAFT_VERSION = 0xFFFFFFFF
 
-DEFAULT_RADIUS = int(os.environ.get("ROUGHLY_DEFAULT_RADIUS", "3"))
+DEFAULT_RADIUS = 3
 CLIENT_VERSIONS_SUPPORTED = build_supported_versions(10, 15)
 
 CERT_VALIDITY = 60 * 60  # 1 hour
+
+GREASE_PROBABILITY = 0.001
+
+
+def grease_add_undefined_tag(message: Message) -> Message:
+    # undefined tags
+    # 4 byte tag name
+    tag_name = int.from_bytes(random.choices(string.ascii_uppercase.encode("ascii"), k=4))
+    tag_value = os.urandom(random.randint(1, 16) * 4)
+
+    message.tags.append(Tag(tag=tag_name, value=tag_value))
+    message.tags.sort(key=lambda t: t.tag)
+    return message
+
+
+def grease_remove_random_tag(message: Message) -> Message:
+    if message.tags:
+        message.tags.remove(random.choice(message.tags))
+    return message
+
+
+def grease_change_version(message: Message) -> Message:
+    # TODO: implement version grease, need to be able to resign packets
+    return message
+
+
+def grease_change_time(message: Message) -> Message:
+    srep_raw = pop_by_tag(message.tags, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_raw.value)
+    # from 0 to uint32 max
+    srep.midpoint = random.randint(0, 0x100000000)
+    new_srep_raw = srep.to_bytes()
+    message.tags.append(Tag(tag=tags.SREP, value=new_srep_raw))
+    message.tags.sort(key=lambda t: t.tag)
+    return message
+
+
+GREASERS: list[Callable[[Message], Message]] = [
+    grease_add_undefined_tag,
+    grease_remove_random_tag,
+    grease_change_time,
+    grease_change_version,  # TODO: implement
+]
+
+
+def grease_message(message: Message) -> Message:
+    greaser = random.choice(GREASERS)
+    logger.debug("Applying greaser: %s", greaser.__name__)
+    return greaser(message)
 
 
 class CertificateStore(NamedTuple):
@@ -119,23 +174,29 @@ class Server(NamedTuple):
     validity_seconds: int | None
     radius: int
     versions: tuple[int, ...]
+    grease: bool
+    grease_probability: float
 
     @staticmethod
     def get_time() -> int:
         return int(time.time())
 
     @classmethod
-    def create(
+    def create(  # noqa: PLR0913
         cls,
         private_key: bytes | None = None,
         *,
         validity_seconds: int | None = None,
         radius: int = DEFAULT_RADIUS,
         versions: Sequence[int] | None = None,
+        grease: bool = False,
+        grease_probability: float | None = None,
     ) -> Server:
         cert_validity_seconds = validity_seconds
         if cert_validity_seconds is None:
             cert_validity_seconds = CERT_VALIDITY
+        if grease_probability is None:
+            grease_probability = GREASE_PROBABILITY
 
         long_term = load_key(private_key) if private_key else generate_key()
         delegated = generate_key()
@@ -166,6 +227,8 @@ class Server(NamedTuple):
             validity_seconds=validity_seconds,
             radius=radius,
             versions=tuple(versions or CLIENT_VERSIONS_SUPPORTED),
+            grease=grease,
+            grease_probability=grease_probability,
         )
 
     def refresh(self) -> Server:
@@ -174,6 +237,8 @@ class Server(NamedTuple):
             validity_seconds=self.validity_seconds,
             radius=self.radius,
             versions=self.versions,
+            grease=self.grease,
+            grease_probability=self.grease_probability,
         )
 
 
@@ -300,7 +365,7 @@ def build_response(  # noqa: PLR0913
     root: bytes,
     path: list[bytes],
     index: int,
-) -> bytes:
+) -> Packet:
     # We very much expect the client to ignore unknown tags
     # we could also be a good programmer and handle versions properly
     # but let's expect clients to be well-built :3
@@ -324,7 +389,7 @@ def build_response(  # noqa: PLR0913
     cert = pick_cert(certificates=server.certificates, version=version)
 
     resp = make_response(server, nonce, version, path, index, srep, cert)
-    return Packet(message=resp).dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
+    return Packet(message=resp)
 
 
 def pick_cert(*, certificates: CertificateStore, version: int) -> Certificate:
@@ -364,7 +429,10 @@ def handle_request(server: Server, data: bytes) -> bytes | None:
     return handle_batch(server, (data,))[0]
 
 
-def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None]:
+def handle_batch(  # noqa: C901 TODO: refactor this function
+    server: Server,
+    requests: Sequence[bytes],
+) -> list[bytes | None]:
     # TODO(batching): we need to ensure that a batch is compatible
     # i.e. having to pick different hashers would break the merkle tree
     # for now, we don't batch requests at all
@@ -441,7 +509,7 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
 
     for merkle_idx, (req_id, req) in enumerate(zip(valid_idx, valid_requests, strict=True)):
         path = get_merkle_path(levels, merkle_idx)
-        response = build_response(
+        packet = build_response(
             server,
             nonce=req.nonce,
             # TODO(batching): select the right version here
@@ -451,6 +519,13 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
             path=path,
             index=merkle_idx,
         )
+
+        if server.grease and random.random() < server.grease_probability:
+            logger.debug("Greasing response for request %d", req_id)
+            grease_message(packet.message)
+
+        response = packet.dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
+
         if len(response) > len(req.raw):
             # we drop responses larger than requests to avoid amplification attacks
             logger.debug(
@@ -482,7 +557,6 @@ class UDPHandler(asyncio.DatagramProtocol):
         logger.debug("Received datagram from %s:%d", host, port)
         try:
             resp = handle_request(self.server, data)
-
             if resp and self.transport:
                 self.transport.sendto(resp, addr)
                 logger.debug("Sent response to %s:%d", host, port)
