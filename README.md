@@ -70,6 +70,7 @@ ROUGHLY_SERVER_PRIVATE_KEY="your_private_key_here" roughly -v server run
 
 By default, the server will bind to `0.0.0.0:2002`. You can change this using the `--host` and `--port` flags.
 I recommend running the server with verbose logging enabled (`-v`), so you can see incoming requests and debug any issues.
+Additionally you might want to consider turning off response greasing while testing using the `--no-grease` flag.
 
 ### As a library
 
