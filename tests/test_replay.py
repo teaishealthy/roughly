@@ -8,8 +8,11 @@ from typing import TypedDict
 
 import pytest
 
-import roughly
+import roughly.client
+import roughly.models
 import roughly.server
+import roughly.shared
+import roughly.tags
 
 PRIVATE_KEY = base64.b64decode("BuXi3Chpe7Nj3gCXavLUIoGbxngyrWVa3pYIHswbzbU=")
 PUBLIC_KEY = base64.b64decode("Ixu7gqjJ9TU6IxsO8wxZxAFT5te6FcZZQq5vXFl35JE=")
@@ -39,16 +42,20 @@ class PacketEntry(PartialPacketEntry):
     other: str  # other party's name
 
 
-def get_tags(message: roughly.Message) -> set[int]:
+def get_tags(message: roughly.models.Message) -> set[int]:
     return {tag.tag for tag in message.tags}
 
-def get_nested_message(message: roughly.Message, path: Iterable[int]) -> roughly.Message:
+
+def get_nested_message(
+    message: roughly.models.Message, path: Iterable[int]
+) -> roughly.models.Message:
     for tag_id in path:
         for tag in message.tags:
             if tag.tag == tag_id:
-                message = roughly.Message.from_bytes(tag.value)
+                message = roughly.models.Message.from_bytes(tag.value)
                 break
     return message
+
 
 def decode_packet(packet: PacketEntry) -> PartialPacketEntry:
     request = base64.b64decode(packet["request"])
@@ -71,8 +78,10 @@ PACKETS = {role: list(items) for role, items in itertools.groupby(load_packets()
 
 @pytest.mark.parametrize("packet", PACKETS[CLIENT], ids=lambda p: f"client-{p['other']}")
 def test_replay_client(packet: PacketEntry) -> None:
-    resp = roughly.VerifiableResponse.from_packet(raw=packet["response"], request=packet["request"])
-    if resp.version == roughly.DRAFT_VERSION_ZERO | 7:
+    resp = roughly.client.VerifiableResponse.from_packet(
+        raw=packet["response"], request=packet["request"]
+    )
+    if resp.version == roughly.shared.DRAFT_VERSION_ZERO | 7:
         resp.verify(DRAFT_7_PUB_KEY)
     else:
         resp.verify(PUBLIC_KEY)
@@ -97,11 +106,13 @@ def test_replay_server(packet: PacketEntry) -> None:
     # so we should be able to parse all responses except Google Roughtime
     # this test is slightly out of scope but it's a good sanity check
     if version != roughly.server.GOOGLE_ROUGHTIME_SENTINEL:
-        resp = roughly.VerifiableResponse.from_packet(raw=responses[0], request=packet["request"])
+        resp = roughly.client.VerifiableResponse.from_packet(
+            raw=responses[0], request=packet["request"]
+        )
         resp.verify(PUBLIC_KEY)
 
-    original_packet = roughly.Packet.from_bytes(packet["response"])
-    response_packet = roughly.Packet.from_bytes(responses[0])
+    original_packet = roughly.models.Packet.from_bytes(packet["response"])
+    response_packet = roughly.models.Packet.from_bytes(responses[0])
 
     assert get_tags(original_packet.message) <= get_tags(response_packet.message), (
         "Missing top-level tags"
@@ -116,7 +127,4 @@ def test_replay_server(packet: PacketEntry) -> None:
 
         tag_name = tag_id.to_bytes(4, "little").decode("ascii", errors="replace")
 
-        assert get_tags(original_nested) <= get_tags(generated_nested), (
-            f"Missing {tag_name} tags"
-        )
-
+        assert get_tags(original_nested) <= get_tags(generated_nested), f"Missing {tag_name} tags"

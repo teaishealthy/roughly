@@ -1,9 +1,10 @@
 import base64
 import contextlib
+from collections.abc import AsyncGenerator
 
 import pytest
 
-import roughly
+import roughly.client
 import roughly.ecosystem
 import roughly.server
 
@@ -20,7 +21,7 @@ SERVER = roughly.ecosystem.Server.from_dict(
 
 
 @contextlib.asynccontextmanager
-async def run_server():
+async def run_server() -> AsyncGenerator[None, None]:
     server = roughly.server.Server.create(private_key=ROUGHLY_PRIVATE_KEY)
 
     transport = await roughly.server._start_server(  # pyright: ignore[reportPrivateUsage]
@@ -36,7 +37,7 @@ async def run_server():
 @pytest.mark.asyncio
 async def test_server_and_client() -> None:
     async with run_server():
-        await roughly.send_request("127.0.0.1", 2002, SERVER.public_key)
+        await roughly.client.send_request("127.0.0.1", 2002, SERVER.public_key)
 
 
 @pytest.mark.asyncio

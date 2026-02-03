@@ -12,14 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-from roughly import (
-    DELEGATION_CONTEXT_STRING,
-    DELEGATION_CONTEXT_STRING_OLD,
-    DRAFT_VERSION_ZERO,
-    GOOGLE_ROUGHTIME_SENTINEL,
-    PACKET_SIZE,
-    RESPONSE_CONTEXT_STRING,
-    TYPE_FIRST_VERSION,
+from roughly.models import (
     Certificate,
     Delegation,
     Message,
@@ -27,6 +20,16 @@ from roughly import (
     PacketError,
     Response,
     SignedResponse,
+    tags,
+)
+from roughly.shared import (
+    DELEGATION_CONTEXT_STRING,
+    DELEGATION_CONTEXT_STRING_OLD,
+    DRAFT_VERSION_ZERO,
+    GOOGLE_ROUGHTIME_SENTINEL,
+    PACKET_SIZE,
+    RESPONSE_CONTEXT_STRING,
+    TYPE_FIRST_VERSION,
     build_supported_versions,
     format_versions,
     partial_sha512,
@@ -34,7 +37,6 @@ from roughly import (
     pop_by_tag_optional,
     sha512,
     sha512_256,
-    tags,
 )
 
 logger = logging.getLogger(__name__)

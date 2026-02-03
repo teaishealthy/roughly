@@ -9,13 +9,14 @@ from typing import Any, cast
 
 import click
 
-import roughly
+import roughly.client
 import roughly.ecosystem
+import roughly.errors
 import roughly.server
 
 # ruff: noqa: FBT001 FBT002 PLR0913
 
-REASON_EXPLANATIONS: dict[roughly.RoughtimeErrorReason, str] = {
+REASON_EXPLANATIONS: dict[roughly.errors.RoughtimeErrorReason, str] = {
     "key-age": "The delegated signing key is too old.",
     "merkle": (
         "The server signed timestamps for multiple requests at once."
@@ -41,16 +42,16 @@ def cli(verbose: bool) -> None:
 
 async def _query(
     host: str, port: int, public_key: bytes, *, timeout: float
-) -> roughly.VerifiableResponse:
+) -> roughly.client.VerifiableResponse:
     async with asyncio.timeout(timeout):
-        return await roughly.send_request(host, port, public_key)
+        return await roughly.client.send_request(host, port, public_key)
 
 
 async def _very_dangerously_query(
     host: str, port: int, public_key: bytes | None, *, timeout: float
-) -> roughly.VerifiableResponse:
+) -> roughly.client.VerifiableResponse:
     async with asyncio.timeout(timeout):
-        return await roughly.very_dangerously_send_request_and_do_not_verify(
+        return await roughly.client.very_dangerously_send_request_and_do_not_verify(
             host,
             port,
             public_key,
@@ -96,7 +97,7 @@ def query(
     except TimeoutError:
         click.echo("Request timed out", err=True)
         return
-    except roughly.VerificationError as e:
+    except roughly.errors.VerificationError as e:
         traceback.print_exc()
         click.echo()
         click.echo("Response received but rejected during verification", err=True)
@@ -106,7 +107,7 @@ def query(
         else:
             click.echo(f"Reason: {e.reason}", err=True)
         return
-    except roughly.RoughtimeError:
+    except roughly.errors.RoughtimeError:
         traceback.print_exc()
         click.echo()
         click.echo("A Roughtime protocol error occured while querying the server", err=True)
@@ -147,7 +148,7 @@ async def _ecosystem_state(ecosystem_path: Path) -> None:
         click.echo(f"- {server.name} ({server.version:#x})")
 
     tasks: list[
-        asyncio.Task[tuple[roughly.ecosystem.Server, roughly.VerifiableResponse | None]]
+        asyncio.Task[tuple[roughly.ecosystem.Server, roughly.client.VerifiableResponse | None]]
     ] = []
 
     for server in selected_servers:

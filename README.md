@@ -78,9 +78,9 @@ I recommend running the server with verbose logging enabled (`-v`), so you can s
 `roughly` can be used as an asynchronous library to query Roughtime servers from your own Python code.
 
 ```python
-import roughly
+import roughly.client
 
-response = await roughly.send_request(
+response = await roughly.client.send_request(
     host="time.teax.dev",
     port=2002,
     public_key=base64.b64decode(b"84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg=")
@@ -120,7 +120,6 @@ if confirm_malfeasance(report):
 You can also programmatically run your own Roughtime server:
 
 ```python
-import roughly
 import roughly.server
 
 server = roughly.server.Server.create() # generates a new keypair
@@ -168,7 +167,7 @@ The interopability matrix of `roughly` against Roughtime servers looks like this
 Make sure to explicitly request only version `0x8000000c` when querying `roughenough` servers, i.e.:
 
 ```python
-await roughly.send_request(
+await roughly.client.send_request(
     # <snip!>
     versions=(0x8000000c,),
 )
