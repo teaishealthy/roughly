@@ -107,6 +107,18 @@
           "address": "time.teax.dev:2002"
         }
       ]
+    },
+    {
+      "name": "TimeNL-Roughtime",
+      "version": "1",
+      "publicKeyType": "ed25519",
+      "publicKey": "v2CievhgKsxzlWPwIkYFUXeA51Akhkv5uhJCj1/kbiY=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "rough.time.nl:2002"
+        }
+      ]
     }
   ]
 }
