@@ -17,7 +17,7 @@ import roughly.server
 # ruff: noqa: FBT001 FBT002 PLR0913
 
 REASON_EXPLANATIONS: dict[roughly.errors.RoughtimeErrorReason, str] = {
-    "key-age": "The delegated signing key is too old.",
+    "key-age": "The delegated signing key isn't valid at the current time.",
     "merkle": (
         "The server signed timestamps for multiple requests at once."
         " This response could not be proven to be part of the signed batch."
