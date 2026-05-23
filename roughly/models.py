@@ -399,7 +399,7 @@ class Response:
             signature=sig.value,
             nonce=nonc.value,
             type=type,
-            path=split_into_chunks(path.value, 4),
+            path=split_into_chunks(path.value, 32),
             signed_response=SignedResponse.from_bytes(srep.value, draft7=draft7),
             certificate=Certificate.from_bytes(cert.value, draft7=draft7),
             index=struct.unpack("<I", indx.value)[0],

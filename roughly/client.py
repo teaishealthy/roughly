@@ -242,9 +242,9 @@ class VerifiableResponse(Response):
 
         for i, node in enumerate(self.path):
             if (self.index >> i) & 1 == 0:
-                h = hasher(b"\x01" + node + h)
-            else:
                 h = hasher(b"\x01" + h + node)
+            else:
+                h = hasher(b"\x01" + node + h)
 
         return h == self.signed_response.root
 
