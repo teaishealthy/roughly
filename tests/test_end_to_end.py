@@ -25,7 +25,7 @@ async def run_server() -> AsyncGenerator[None, None]:
     server = roughly.server.Server.create(private_key=ROUGHLY_PRIVATE_KEY)
 
     transport = await roughly.server._start_server(  # pyright: ignore[reportPrivateUsage]
-        server, host="127.0.0.1", port=2002, handler=roughly.server.UDPHandler
+        lambda: roughly.server.UDPHandler(server), host="127.0.0.1", port=2002
     )
 
     try:

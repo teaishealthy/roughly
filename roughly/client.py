@@ -20,13 +20,12 @@ from roughly.models import (
     Tag,
 )
 from roughly.shared import (
-    DRAFT_VERSION_ZERO,
+    GOOGLE_ROUGHTIME_SENTINEL,
     RESPONSE_CONTEXT_STRING,
-    build_supported_versions,
+    VERSIONS_SUPPORTED,
+    ProtocolProfile,
     find_by_predicate,
     partial_sha512,
-    pick_delegation_string,
-    sha512_256,
 )
 
 if TYPE_CHECKING:
@@ -39,12 +38,8 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
 
-VERSIONS_SUPPORTED = (1, *build_supported_versions(7, 15))
-
-
 class QueueDatagramProtocol(asyncio.DatagramProtocol):
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        self.loop = loop
+    def __init__(self) -> None:
         self.transport: asyncio.DatagramTransport | None = None
         self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]] | Exception] = asyncio.Queue()
 
@@ -72,7 +67,7 @@ class QueueDatagramProtocol(asyncio.DatagramProtocol):
 async def open_udp_socket(host: str, port: int):  # noqa: ANN201
     loop = asyncio.get_running_loop()
     transport, protocol = await loop.create_datagram_endpoint(
-        lambda: QueueDatagramProtocol(loop),
+        QueueDatagramProtocol,
         remote_addr=(host, port),
     )
     return transport, protocol
@@ -181,6 +176,8 @@ class VerifiableResponse(Response):
     srep_raw: bytes
     """The raw SREP tag bytes for signature verification"""
 
+    _profile: ProtocolProfile
+
     @property
     def version(self) -> int:
         """The version of the response."""
@@ -197,15 +194,14 @@ class VerifiableResponse(Response):
     def from_packet(cls, *, raw: bytes, request: bytes) -> VerifiableResponse:
         p = Packet.from_bytes(raw)
 
-        # VDIFF: detect draft-7 for SignedResponse and Certificate parsing
-        draft7 = False
         ver_result = find_by_predicate(p.message.tags, lambda t: t.tag == tags.VER)
         if ver_result is not None:
-            (maybe_ver,) = struct.unpack("<I", p.message.tags[ver_result].value)
-            if maybe_ver == DRAFT_VERSION_ZERO | 7:
-                draft7 = True
+            (wire_ver,) = struct.unpack("<I", p.message.tags[ver_result].value)
+        else:
+            wire_ver = GOOGLE_ROUGHTIME_SENTINEL
+        wire_profile = ProtocolProfile.from_version(wire_ver)
 
-        response, dele_raw, srep_raw = Response.from_message(p.message, draft7=draft7)
+        response, dele_raw, srep_raw = Response.from_message(p.message, profile=wire_profile)
 
         verifiable = cls(
             signature=response.signature,
@@ -220,36 +216,29 @@ class VerifiableResponse(Response):
             packet=p,
             dele_raw=dele_raw,
             srep_raw=srep_raw,
+            _profile=wire_profile,
         )
+        verifiable._profile = ProtocolProfile.from_version(verifiable.version)
 
-        # VDIFF: check TYPE tag presence for draft-14+
-        if verifiable.version >= DRAFT_VERSION_ZERO | 14 and response.type is None:
-            raise PacketError("TYPE tag missing in draft-14+ response")
+        if wire_profile.type_tag_required and response.type is None:
+            raise PacketError("TYPE tag missing in response")
 
         return verifiable
 
     def _verify_merkle(self) -> bool:
-        hasher = partial_sha512
-        # VDIFF: until draft-8: use sha512_256
-        if self.version <= DRAFT_VERSION_ZERO | 7:
-            hasher = sha512_256
-
-        # VDIFF: until draft-12: leaves are built from nonce
-        if self.version >= DRAFT_VERSION_ZERO | 12:
-            h = hasher(b"\x00" + self.request)
-        else:
-            h = hasher(b"\x00" + self.nonce)
+        raw = self.request if self._profile.leaf_from_request else self.nonce
+        h = self._profile.hasher(b"\x00" + raw)
 
         for i, node in enumerate(self.path):
             if (self.index >> i) & 1 == 0:
-                h = hasher(b"\x01" + h + node)
+                h = self._profile.hasher(b"\x01" + h + node)
             else:
-                h = hasher(b"\x01" + node + h)
+                h = self._profile.hasher(b"\x01" + node + h)
 
         return h == self.signed_response.root
 
     def verify(self, long_term_public_key_bytes: bytes) -> bool:
-        delegation_context_string = pick_delegation_string(self.version)
+        delegation_context_string = self._profile.delegation_context
 
         # 5.4. Validity of Response
 

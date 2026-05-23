@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING
 from roughly import tags
 from roughly.errors import FormatError, PacketError
 from roughly.shared import (
-    DRAFT_VERSION_ZERO,
     GOOGLE_ROUGHTIME_SENTINEL,
     PACKET_SIZE,
     ROUGHTIM,
+    VERSIONS_SUPPORTED,
+    ProtocolProfile,
     always,
     convert_mjd_to_unix,
     find_by_predicate,
@@ -135,17 +136,19 @@ class Message:
         return cls(tags=tag_list)
 
 
+_DEFAULT_PROFILE = ProtocolProfile.from_version(max(VERSIONS_SUPPORTED))
+
+
 @dataclass
 class Packet:
     message: Message
     magic: int = ROUGHTIM
 
-    def dump(self, *, google: bool = False) -> bytes:
+    def dump(self, *, profile: ProtocolProfile = _DEFAULT_PROFILE) -> bytes:
         message_data = self.message.to_bytes()
         data = b""
 
-        # VDIFF: Google Roughtime clients omit the magic and length fields
-        if not google:
+        if profile.packet_framing:
             data += struct.pack("<Q", self.magic)
             data += struct.pack("<I", len(message_data))
 
@@ -179,7 +182,7 @@ class SignedResponse:
     root: bytes
 
     @classmethod
-    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> SignedResponse:
+    def from_bytes(cls, data: bytes, *, profile: ProtocolProfile) -> SignedResponse:
         message = Message.from_bytes(data)
         radius_tag = pop_by_tag(message.tags, tags.RADI)
         midpoint_tag = pop_by_tag(message.tags, tags.MIDP)
@@ -189,11 +192,8 @@ class SignedResponse:
         (radius,) = struct.unpack("<I", radius_tag.value)
         (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
 
-        # VDIFF: draft-7 uses MJD for midpoint and radius in microseconds
-        if draft7:
+        if profile.use_mjd:
             midpoint = convert_mjd_to_unix(midpoint)
-            # We lose a ton of precision here, but I don't really care about draft-7 that much
-            # later specs require a radius of at least 1 second anyway
             radius = max(1, microseconds_to_seconds(radius))
 
         versions = (
@@ -220,8 +220,8 @@ class SignedResponse:
                 Tag(tag=tags.ROOT, value=self.root),
             ]
         )
-        # VDIFF: we can't pack GOOGLE_ROUGHTIME_SENTINEL as a u32
-        # vroughtime clients expect no VER/VERS tags at all
+        # GOOGLE_ROUGHTIME_SENTINEL is 128-bit and cannot be packed as u32;
+        # vroughtime clients also expect no VER/VERS tags in the signed response.
         if self.version != GOOGLE_ROUGHTIME_SENTINEL:
             message.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", self.version)))
             message.tags.append(
@@ -239,7 +239,7 @@ class Delegation:
     max_time: int
 
     @classmethod
-    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> Delegation:
+    def from_bytes(cls, data: bytes, *, profile: ProtocolProfile) -> Delegation:
         dele_message = Message.from_bytes(data)
 
         pubk_tag = pop_by_tag(dele_message.tags, tags.PUBK)
@@ -250,8 +250,7 @@ class Delegation:
         (min_time,) = struct.unpack("<Q", mint_tag.value)
         (max_time,) = struct.unpack("<Q", maxt_tag.value)
 
-        # VDIFF: draft-7 uses MJD for min_time and max_time
-        if draft7:
+        if profile.use_mjd:
             min_time = convert_mjd_to_unix(min_time)
             max_time = convert_mjd_to_unix(max_time)
 
@@ -279,10 +278,10 @@ class Certificate:
     signature: bytes
 
     @classmethod
-    def from_bytes(cls, data: bytes, *, draft7: bool = False) -> Certificate:
+    def from_bytes(cls, data: bytes, *, profile: ProtocolProfile) -> Certificate:
         message = Message.from_bytes(data)
         dele_tag = pop_by_tag(message.tags, tags.DELE)
-        delegation = Delegation.from_bytes(dele_tag.value, draft7=draft7)
+        delegation = Delegation.from_bytes(dele_tag.value, profile=profile)
 
         signature_tag = pop_by_tag(message.tags, tags.SIG)
         signature = signature_tag.value
@@ -337,7 +336,7 @@ class Response:
     index: int
     """The index of the server in the Merkle tree."""
 
-    def to_message(self, *, version: int) -> Message:
+    def to_message(self, *, profile: ProtocolProfile) -> Message:
         """Serialize to a Roughtime message for sending."""
         srep_raw = self.signed_response.to_bytes()
 
@@ -352,12 +351,11 @@ class Response:
             ]
         )
 
-        # VDIFF: vroughtime issue
-        if version != GOOGLE_ROUGHTIME_SENTINEL:
+        if profile.packet_framing:
             resp.tags.append(Tag(tag=tags.TYPE, value=struct.pack("<I", tags.TYPE_RESPONSE)))
 
-        if version <= DRAFT_VERSION_ZERO | 11:
-            resp.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
+        if profile.ver_tag_in_response:
+            resp.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", profile.version)))
 
         resp.tags.sort(key=lambda t: t.tag)
         return resp
@@ -367,7 +365,7 @@ class Response:
         cls,
         message: Message,
         *,
-        draft7: bool = False,
+        profile: ProtocolProfile,
     ) -> tuple[Response, bytes, bytes]:
         """Parse from a Roughtime message.
 
@@ -400,8 +398,8 @@ class Response:
             nonce=nonc.value,
             type=type,
             path=split_into_chunks(path.value, 32),
-            signed_response=SignedResponse.from_bytes(srep.value, draft7=draft7),
-            certificate=Certificate.from_bytes(cert.value, draft7=draft7),
+            signed_response=SignedResponse.from_bytes(srep.value, profile=profile),
+            certificate=Certificate.from_bytes(cert.value, profile=profile),
             index=struct.unpack("<I", indx.value)[0],
         )
 

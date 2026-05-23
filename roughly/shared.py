@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from cryptography.hazmat.primitives import hashes
 
 from roughly.errors import RoughtimeError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, MutableSequence
+    from collections.abc import Iterable, MutableSequence
 
     from roughly.models import Tag
 
@@ -24,9 +26,6 @@ DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
 DRAFT_VERSION_ZERO = 0x80000000
-
-# the TYPE tag was introduced in draft-14
-TYPE_FIRST_VERSION = DRAFT_VERSION_ZERO | 14
 
 # The actual value is not important, we just need a unique sentinel
 # that doesn't make sense semantically
@@ -59,9 +58,106 @@ def sha512(data: bytes) -> bytes:
     return digest.finalize()
 
 
+ProfileKey: TypeAlias = tuple[Callable[[bytes], bytes], bool]  # noqa: UP040
+
+
+@dataclass(frozen=True)
+class ProtocolProfile:
+    """Collection of version-specific protocol parameters and behaviors."""
+
+    version: int
+    hasher: Callable[[bytes], bytes]
+    leaf_from_request: bool
+    """True (draft >=12): Merkle leaf input is the full request packet; False: nonce only."""
+    delegation_context: bytes
+    nonce_size: int
+    packet_framing: bool
+    """True for all draft versions; False for Google (raw message, no magic/len header)."""
+    type_tag_required: bool
+    """True for draft >=14: TYPE tag must be present in incoming requests."""
+    ver_tag_in_response: bool
+    """True for draft <=11: include VER tag in outgoing responses."""
+    midpoint_in_microseconds: bool
+    """True for Google: MIDP/RADI on the wire are in microseconds."""
+    use_mjd: bool
+    """True for draft-7: midpoint is encoded as MJD rather than Unix seconds."""
+    cert_times_in_microseconds: bool
+    """True for Google: MINT/MAXT in the delegation certificate are in microseconds."""
+
+    @property
+    def key(self) -> ProfileKey:
+        return (self.hasher, self.leaf_from_request)
+
+    @staticmethod
+    def from_version(version: int) -> ProtocolProfile:
+        """Return the ProtocolProfile for a given Roughtime version."""
+        if version == GOOGLE_ROUGHTIME_SENTINEL:
+            return ProtocolProfile(
+                version=version,
+                hasher=sha512,
+                leaf_from_request=False,
+                delegation_context=DELEGATION_CONTEXT_STRING_OLD,
+                nonce_size=64,
+                packet_framing=False,
+                type_tag_required=False,
+                ver_tag_in_response=False,
+                midpoint_in_microseconds=True,
+                use_mjd=False,
+                cert_times_in_microseconds=True,
+            )
+
+        if version <= DRAFT_VERSION_ZERO | 7:
+            return ProtocolProfile(
+                version=version,
+                hasher=sha512_256,
+                leaf_from_request=False,
+                delegation_context=DELEGATION_CONTEXT_STRING,
+                nonce_size=64,
+                packet_framing=True,
+                type_tag_required=False,
+                ver_tag_in_response=True,
+                midpoint_in_microseconds=False,
+                use_mjd=version == DRAFT_VERSION_ZERO | 7,
+                cert_times_in_microseconds=False,
+            )
+
+        if version < DRAFT_VERSION_ZERO | 12:  # draft 8-11
+            return ProtocolProfile(
+                version=version,
+                hasher=partial_sha512,
+                leaf_from_request=False,
+                delegation_context=DELEGATION_CONTEXT_STRING_OLD,
+                nonce_size=32,
+                packet_framing=True,
+                type_tag_required=False,
+                ver_tag_in_response=True,
+                midpoint_in_microseconds=False,
+                use_mjd=False,
+                cert_times_in_microseconds=False,
+            )
+
+        # draft 12+
+        return ProtocolProfile(
+            version=version,
+            hasher=partial_sha512,
+            leaf_from_request=True,
+            delegation_context=DELEGATION_CONTEXT_STRING,
+            nonce_size=32,
+            packet_framing=True,
+            type_tag_required=version >= DRAFT_VERSION_ZERO | 14,
+            ver_tag_in_response=False,
+            midpoint_in_microseconds=False,
+            use_mjd=False,
+            cert_times_in_microseconds=False,
+        )
+
+
 def build_supported_versions(start: int, end: int) -> tuple[int, ...]:
     # Build a tuple of supported Roughtime versions (inclusive of start and end)
     return tuple(sorted(DRAFT_VERSION_ZERO | v for v in range(start, end + 1)))
+
+
+VERSIONS_SUPPORTED = (1, *build_supported_versions(7, 15))
 
 
 def split_into_chunks(data: bytes, chunk_size: int) -> list[bytes]:
@@ -72,16 +168,6 @@ def always(x: T | None) -> T:  # noqa: UP047
     if x is None:
         raise RuntimeError("Expected non-None value")
     return x
-
-
-def pick_delegation_string(version: int) -> bytes:
-    # VDIFF: what? the context string got changed in draft-8 through draft-11
-    # and then got changed back in draft-12
-    delegation_context_string = DELEGATION_CONTEXT_STRING
-
-    if DRAFT_VERSION_ZERO | 7 < version < DRAFT_VERSION_ZERO | 12:
-        delegation_context_string = DELEGATION_CONTEXT_STRING_OLD
-    return delegation_context_string
 
 
 def pop_by_tag(tag_list: MutableSequence[Tag], tag_value: int) -> Tag:

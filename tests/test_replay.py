@@ -94,7 +94,7 @@ def test_replay_server(packet: PacketEntry) -> None:
     req = roughly.server.Request.from_bytes(packet["request"])
     version = roughly.server.select_version(req.versions, roughly.server.CLIENT_VERSIONS_SUPPORTED)
     assert version is not None, "No compatible version found"
-    req.validate(version)
+    req.validate(roughly.server.ProtocolProfile.from_version(version))
 
     responses = roughly.server.handle_batch(server, (req.raw,))
 
