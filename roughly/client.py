@@ -26,6 +26,7 @@ from roughly.shared import (
     ProtocolProfile,
     find_by_predicate,
     partial_sha512,
+    pop_by_tag,
 )
 
 if TYPE_CHECKING:
@@ -222,6 +223,19 @@ class VerifiableResponse(Response):
 
         if wire_profile.type_tag_required and response.type is None:
             raise PacketError("TYPE tag missing in response")
+
+        request_message = Packet.from_bytes(request).message
+        vers = pop_by_tag(request_message.tags, tags.VER)
+        versions = struct.unpack(f"<{len(vers.value) // 4}I", vers.value)
+        if verifiable.version not in versions:
+            raise PacketError(
+                f"Response version {verifiable.version:#x} not in request VER list: "
+                + ", ".join(f"{v:#x}" for v in versions)
+            )
+
+        nonc = pop_by_tag(request_message.tags, tags.NONC)
+        if verifiable.nonce != nonc.value:
+            raise PacketError("Response NONC does not match request NONC")
 
         return verifiable
 
