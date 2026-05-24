@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
 import string
@@ -58,9 +59,7 @@ CERT_VALIDITY = 60 * 60  # 1 hour
 GREASE_PROBABILITY = 0.001
 
 
-def grease_add_undefined_tag(message: Message) -> Message:
-    # undefined tags
-    # 4 byte tag name
+def grease_add_undefined_tag(server: Server, message: Message) -> Message:  # noqa: ARG001
     tag_name = int.from_bytes(random.choices(string.ascii_uppercase.encode("ascii"), k=4))
     tag_value = os.urandom(random.randint(1, 16) * 4)
 
@@ -69,21 +68,39 @@ def grease_add_undefined_tag(message: Message) -> Message:
     return message
 
 
-def grease_remove_random_tag(message: Message) -> Message:
+def grease_remove_random_tag(server: Server, message: Message) -> Message:  # noqa: ARG001
     if message.tags:
         message.tags.remove(random.choice(message.tags))
     return message
 
 
-def grease_change_version(message: Message) -> Message:
-    # TODO: implement version grease, need to be able to resign packets
+def grease_change_version(server: Server, message: Message) -> Message:
+    srep_raw = pop_by_tag(message.tags, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_raw.value)
+
+    forbidden = set(server.versions) | {srep.version}
+    while True:
+        candidate = DRAFT_VERSION_ZERO | random.randint(20, 0xFFFF)
+        if candidate not in forbidden:
+            break
+    srep.version = candidate
+
+    new_srep_raw = srep.to_bytes()
+    new_sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + new_srep_raw)
+
+    sig_tag = pop_by_tag(message.tags, tags.SIG)
+    sig_tag.value = new_sig
+
+    message.tags.append(Tag(tag=tags.SREP, value=new_srep_raw))
+    message.tags.append(sig_tag)
+    message.tags.sort(key=lambda t: t.tag)
     return message
 
 
-def grease_change_time(message: Message) -> Message:
+def grease_change_time(server: Server, message: Message) -> Message:  # noqa: ARG001
     srep_raw = pop_by_tag(message.tags, tags.SREP)
     srep = SignedResponse.from_bytes(srep_raw.value)
-    # from 0 to uint32 max
+
     srep.midpoint = random.randint(0, 0x100000000)
     new_srep_raw = srep.to_bytes()
     message.tags.append(Tag(tag=tags.SREP, value=new_srep_raw))
@@ -91,18 +108,34 @@ def grease_change_time(message: Message) -> Message:
     return message
 
 
-GREASERS: list[Callable[[Message], Message]] = [
+GREASERS: list[Callable[[Server, Message], Message]] = [
     grease_add_undefined_tag,
     grease_remove_random_tag,
     grease_change_time,
-    grease_change_version,  # TODO: implement
+    grease_change_version,
 ]
 
 
-def grease_message(message: Message) -> Message:
-    greaser = random.choice(GREASERS)
-    logger.debug("Applying greaser: %s", greaser.__name__)
-    return greaser(message)
+def grease_message(server: Server, message: Message) -> Message:
+    count = random.randint(1, len(GREASERS))
+    chosen = random.sample(GREASERS, count)
+
+    applied = 0
+    for greaser in chosen:
+        snapshot = copy.deepcopy(message)
+        try:
+            greaser(server, message)
+        except Exception:  # noqa: BLE001
+            logger.debug("Greaser %s failed, reverting", greaser.__name__, exc_info=True)
+            message = snapshot
+            continue
+        logger.debug("Applied greaser: %s", greaser.__name__)
+        applied += 1
+
+    if applied == 0:
+        logger.warning("No greasers managed to apply.")
+
+    return message
 
 
 class CertificateStore(NamedTuple):
@@ -522,7 +555,7 @@ def handle_batch(  # noqa: C901 TODO: refactor this function
 
         if server.grease and random.random() < server.grease_probability:
             logger.debug("Greasing response for request %d", req_id)
-            grease_message(packet.message)
+            packet.message = grease_message(server, packet.message)
 
         response = packet.dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
 
