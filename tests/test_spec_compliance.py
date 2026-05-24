@@ -652,7 +652,7 @@ def test_client_ignores_undefined_tags_in_response() -> None:
     resp.verify(server.public_key_bytes(srv.long_term_key))
 
 
-# Misc — VER/NONC echoed properly across versions
+# Misc - VER/NONC echoed properly across versions
 
 
 @pytest.mark.parametrize("version", [DRAFT_11, DRAFT_14, DRAFT_15])
@@ -663,3 +663,197 @@ def test_verify_succeeds_across_supported_versions(version: int) -> None:
     response = roundtrip(srv, raw)
     resp = client.VerifiableResponse.from_packet(raw=response, request=raw)
     resp.verify(server.public_key_bytes(srv.long_term_key))
+
+
+# Parser-rejection tests - the reverse direction of the emitter-spec tests above.
+# Each asserts that the parser/server/client rejects an input that violates a MUST
+# from the spec. Counterparts to existing "we emit X correctly" tests.
+
+
+# §4.2 Message format - parser must reject violations of the wire encoding rules.
+
+
+def test_parser_rejects_unsorted_tags() -> None:
+    """§4.2: tags MUST be sorted ascending. Counterpart to test_message_tags_sorted_ascending."""
+    # NONC (0x434e4f4e) > VER (0x00524556) - placing NONC first is unsorted.
+    msg = Message(
+        tags=[
+            Tag(tag=tags.NONC, value=os.urandom(32)),
+            Tag(tag=tags.VER, value=struct.pack("<I", DRAFT_15)),
+        ]
+    )
+    raw = msg.to_bytes()
+    with pytest.raises(PacketError):
+        Message.from_bytes(raw)
+
+
+def test_parser_rejects_duplicate_tags() -> None:
+    """§4.2: tags MUST be unique within a message."""
+    msg = Message(
+        tags=[
+            Tag(tag=tags.VER, value=struct.pack("<I", DRAFT_15)),
+            Tag(tag=tags.VER, value=struct.pack("<I", DRAFT_14)),
+        ]
+    )
+    raw = msg.to_bytes()
+    with pytest.raises(PacketError):
+        Message.from_bytes(raw)
+
+
+def test_parser_rejects_non_4_byte_aligned_value_offsets() -> None:
+    """§4.2: offsets MUST be multiples of 4. Counterpart to ...offsets_are_4_byte_aligned."""
+    # Manually construct: 2 tags, first value is 3 bytes (not 4-byte aligned),
+    # so the offset to the second value is 3.
+    header = struct.pack("<I", 2)  # num_pairs
+    header += struct.pack("<I", 3)  # offset for second value (not multiple of 4)
+    header += struct.pack("<I", tags.VER)
+    header += struct.pack("<I", tags.NONC)
+    raw = header + b"abc" + b"defg"
+    with pytest.raises(PacketError):
+        Message.from_bytes(raw)
+
+
+def test_packet_rejects_trailing_data_past_declared_length() -> None:
+    """§5: framed packet length MUST match the encoded message length.
+
+    Counterpart to test_packet_framing_includes_message_length - a strict parser
+    should refuse trailing data rather than silently dropping it.
+    """
+    raw = make_request()
+    tampered = raw + b"trailing-junk"
+    with pytest.raises(PacketError):
+        Packet.from_bytes(tampered)
+
+
+# §5.1.1 - server must reject malformed VER lists.
+
+
+def test_server_drops_request_with_unsorted_ver_list() -> None:
+    """§5.1.1 L517: VER MUST be sorted ascending. Counterpart to ...versions_sorted_and_unique."""
+    srv = make_server()
+    raw = client.build_request(versions=(DRAFT_15, DRAFT_14)).dump()
+    assert server.handle_batch(srv, (raw,)) == [None]
+
+
+def test_server_drops_request_with_duplicate_versions() -> None:
+    """§5.1.1 L517: VER MUST NOT repeat. Counterpart to ...versions_sorted_and_unique."""
+    srv = make_server()
+    raw = client.build_request(versions=(DRAFT_15, DRAFT_15)).dump()
+    assert server.handle_batch(srv, (raw,)) == [None]
+
+
+# §5.1.2 - server must reject wrong nonce size for the chosen version.
+
+
+def test_server_drops_request_with_wrong_nonce_size_for_draft_15() -> None:
+    """§5.1.2 L527: draft-15 nonce MUST be 32 bytes. Counterpart to ...nonce_is_32_bytes."""
+    srv = make_server()
+    raw = make_request(nonce=os.urandom(16))
+    assert server.handle_batch(srv, (raw,)) == [None]
+
+
+# §5.2.4 / §5.2.5 - client must reject responses that violate structural MUSTs in SREP.
+
+
+def test_verify_rejects_path_with_more_than_32_hashes() -> None:
+    """§5.2.4 L662: PATH MUST NOT contain more than 32 hash values.
+
+    Counterpart to test_response_path_at_most_32_hashes.
+    """
+    srv = make_server()
+    raw = make_request()
+    response = roundtrip(srv, raw)
+
+    packet = Packet.from_bytes(response)
+    path_tag = get_tag(packet.message, tags.PATH)
+    path_tag.value = os.urandom(33 * 32)
+    tampered = remake_packet(packet.message)
+
+    def _parse_and_verify() -> None:
+        resp = client.VerifiableResponse.from_packet(raw=tampered, request=raw)
+        resp.verify(server.public_key_bytes(srv.long_term_key))
+
+    with pytest.raises((PacketError, VerificationError)):
+        _parse_and_verify()
+
+
+def test_verify_rejects_zero_radius() -> None:
+    """§5.2.5 L691: RADI MUST NOT be zero. Counterpart to test_response_radi_is_nonzero."""
+    srv = make_server()
+    raw = make_request()
+    response = roundtrip(srv, raw)
+
+    packet = Packet.from_bytes(response)
+    srep_tag = get_tag(packet.message, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_tag.value, profile=PROFILE_15)
+    srep.radius = 0
+    srep_tag.value = srep.to_bytes()
+    resign_srep(packet.message, srv.delegated_key)
+    tampered = remake_packet(packet.message)
+
+    resp = client.VerifiableResponse.from_packet(raw=tampered, request=raw)
+    with pytest.raises(VerificationError):
+        resp.verify(server.public_key_bytes(srv.long_term_key))
+
+
+def test_verify_rejects_vers_missing_response_version() -> None:
+    """§5.2.5 L701: VERS MUST contain the version in VER. Counterpart to ...vers_contains_ver."""
+    srv = make_server()
+    raw = make_request()
+    response = roundtrip(srv, raw)
+
+    packet = Packet.from_bytes(response)
+    srep_tag = get_tag(packet.message, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_tag.value, profile=PROFILE_15)
+    # Drop the chosen version from VERS while leaving srep.version (VER) intact.
+    srep.versions = tuple(v for v in srep.versions if v != srep.version) or (DRAFT_11,)
+    assert srep.version not in srep.versions
+    srep_tag.value = srep.to_bytes()
+    resign_srep(packet.message, srv.delegated_key)
+    tampered = remake_packet(packet.message)
+
+    resp = client.VerifiableResponse.from_packet(raw=tampered, request=raw)
+    with pytest.raises(VerificationError):
+        resp.verify(server.public_key_bytes(srv.long_term_key))
+
+
+def test_verify_rejects_vers_unsorted() -> None:
+    """§5.2.5 L704: VERS MUST be sorted ascending. Counterpart to ...vers_sorted_and_at_most_32."""
+    srv = make_server()
+    raw = make_request()
+    response = roundtrip(srv, raw)
+
+    packet = Packet.from_bytes(response)
+    srep_tag = get_tag(packet.message, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_tag.value, profile=PROFILE_15)
+    srep.versions = (DRAFT_15, DRAFT_14, DRAFT_11)  # explicitly descending
+    srep.version = DRAFT_15
+    srep_tag.value = srep.to_bytes()
+    resign_srep(packet.message, srv.delegated_key)
+    tampered = remake_packet(packet.message)
+
+    resp = client.VerifiableResponse.from_packet(raw=tampered, request=raw)
+    with pytest.raises(VerificationError):
+        resp.verify(server.public_key_bytes(srv.long_term_key))
+
+
+def test_verify_rejects_vers_with_more_than_32_entries() -> None:
+    """§5.2.5 L702: VERS MUST NOT exceed 32. Counterpart to ...vers_sorted_and_at_most_32."""
+    srv = make_server()
+    raw = make_request()
+    response = roundtrip(srv, raw)
+
+    packet = Packet.from_bytes(response)
+    srep_tag = get_tag(packet.message, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_tag.value, profile=PROFILE_15)
+    extras = tuple(DRAFT_VERSION_ZERO | (100 + i) for i in range(32))
+    srep.versions = tuple(sorted({DRAFT_15, *extras}))
+    assert len(srep.versions) == 33
+    srep.version = DRAFT_15
+    srep_tag.value = srep.to_bytes()
+    resign_srep(packet.message, srv.delegated_key)
+    tampered = remake_packet(packet.message)
+
+    resp = client.VerifiableResponse.from_packet(raw=tampered, request=raw)
+    with pytest.raises(VerificationError):
+        resp.verify(server.public_key_bytes(srv.long_term_key))
