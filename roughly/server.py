@@ -426,9 +426,6 @@ def make_response(  # noqa: PLR0913
     return response.to_message(profile=profile)
 
 
-def handle_request(server: Server, data: bytes) -> bytes | None:
-    return handle_batch(server, (data,))[0]
-
 
 @contextmanager
 def _rethrow(old: type[BaseException], new: type[BaseException]) -> Generator[None, None, None]:
