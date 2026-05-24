@@ -84,6 +84,9 @@ class ProtocolProfile:
     cert_times_in_microseconds: bool
     """True for Google: MINT/MAXT in the delegation certificate are in microseconds."""
 
+    sorted_versions: bool
+    """True for draft >=12: listed versions must be sorted in ascending order"""
+
     @property
     def key(self) -> ProfileKey:
         return (self.hasher, self.leaf_from_request)
@@ -104,6 +107,7 @@ class ProtocolProfile:
                 midpoint_in_microseconds=True,
                 use_mjd=False,
                 cert_times_in_microseconds=True,
+                sorted_versions=False,
             )
 
         if version <= DRAFT_VERSION_ZERO | 7:
@@ -119,6 +123,7 @@ class ProtocolProfile:
                 midpoint_in_microseconds=False,
                 use_mjd=version == DRAFT_VERSION_ZERO | 7,
                 cert_times_in_microseconds=False,
+                sorted_versions=False,
             )
 
         if version < DRAFT_VERSION_ZERO | 12:  # draft 8-11
@@ -134,6 +139,7 @@ class ProtocolProfile:
                 midpoint_in_microseconds=False,
                 use_mjd=False,
                 cert_times_in_microseconds=False,
+                sorted_versions=False,
             )
 
         # draft 12+
@@ -149,6 +155,7 @@ class ProtocolProfile:
             midpoint_in_microseconds=False,
             use_mjd=False,
             cert_times_in_microseconds=False,
+            sorted_versions=True,
         )
 
 
