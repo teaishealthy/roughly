@@ -17,12 +17,12 @@ Draft versions 10 through 19 are supported for running a server. Also supports q
 ## Quickstart
 
 ### Installation
-You can install `roughly` from GitHub using your favorite package manager, for example with `pip`:
+You can install `roughly` from PyPI using your favorite package manager, for example with `pip`:
 
 ```bash
-pip install "git+https://github.com/teaishealthy/roughly.git"
+pip install roughly
 # or with the cli extra
-pip install "git+https://github.com/teaishealthy/roughly.git#egg=project[cli]"
+pip install roughly[cli]
 ```
 
 ### As a CLI
@@ -33,9 +33,8 @@ You can use `roughly` as a command line tool to query Roughtime servers.
 Install `roughly` with the `cli` extra using your favorite CLI package manager, for example with `uv` (or `pipx`):
 
 ```bash
-# Assuming you cloned the repository
-uv tool install .[cli]
-pipx install .[cli]
+uv tool install roughly[cli]
+pipx install roughly[cli]
 ```
 
 Then you can query a Roughtime server like so:

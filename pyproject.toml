@@ -1,10 +1,36 @@
 [project]
 name = "roughly"
 version = "0.1.0"
-description = "A Roughtime client library for Python"
+description = "An asynchronous Roughtime implementation for Python"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = ["cryptography>=46.0.3"]
+keywords = ["roughtime", "time", "ntp", "synchronization", "asyncio"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+
+    "Operating System :: OS Independent",
+
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+
+    "Topic :: Internet",
+    "Topic :: Security :: Cryptography",
+    "Topic :: System :: Networking",
+    "Topic :: System :: Networking :: Time Synchronization",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+    "Framework :: AsyncIO",
+]
+
+[project.urls]
+"Repository" = "https://github.com/teaishealthy/roughly"
+"Issues" = "https://github.com/teaishealthy/roughly/issues"
 
 [project.optional-dependencies]
 cli = ["click>=8.3.1"]
