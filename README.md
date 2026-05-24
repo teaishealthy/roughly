@@ -3,15 +3,15 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/teaishealthy/teaishealthy/refs/heads/main/ruff-badge.json&style=flat-square)](https://github.com/astral-sh/ruff)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/teaishealthy/roughly/tests.yml?style=flat-square&label=tests)
 ![Coveralls](https://img.shields.io/coverallsCoverage/github/teaishealthy/roughly?style=flat-square)
-[![Roughtime draft 07-15](https://img.shields.io/badge/draft%2007--15-f2d3ff?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15)
+[![Roughtime draft 07-19](https://img.shields.io/badge/draft%2007--19-f2d3ff?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19)
 ![WIP](https://img.shields.io/badge/WIP-ffb1b1?style=flat-square)
 
 An asynchronous implemenation of the Roughtime protocol for Python.
 
-Implements the Roughtime protocol as described in https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-15.
+Implements the Roughtime protocol as described in https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19.
 
-Draft versions 07 through 15 are supported for querying servers.\
-Draft versions 10 through 15 are supported for running a server. Also supports queries from Google Roughtime clients.
+Draft versions 07 through 19 are supported for querying servers.\
+Draft versions 10 through 19 are supported for running a server. Also supports queries from Google Roughtime clients.
 
 
 ## Quickstart
@@ -79,9 +79,9 @@ Additionally you might want to consider turning off response greasing while test
 `roughly` can be used as an asynchronous library to query Roughtime servers from your own Python code.
 
 ```python
-import roughly
+import roughly.client
 
-response = await roughly.send_request(
+response = await roughly.client.send_request(
     host="time.teax.dev",
     port=2002,
     public_key=base64.b64decode(b"84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg=")
@@ -121,7 +121,6 @@ if confirm_malfeasance(report):
 You can also programmatically run your own Roughtime server:
 
 ```python
-import roughly
 import roughly.server
 
 server = roughly.server.Server.create() # generates a new keypair
@@ -169,7 +168,7 @@ The interopability matrix of `roughly` against Roughtime servers looks like this
 Make sure to explicitly request only version `0x8000000c` when querying `roughenough` servers, i.e.:
 
 ```python
-await roughly.send_request(
+await roughly.client.send_request(
     # <snip!>
     versions=(0x8000000c,),
 )
@@ -195,10 +194,6 @@ await roughly.send_request(
 Support for draft-7 is limited, in the sense that `roughly` will fit responses from draft-7 servers into the draft-15 data structures.
 This means that some fields that are not present in draft-8+ (such as DUT1, DTAI, and LEAP) will be missing.
 Additionally draft-7 offered for the precision of radius to be in microseconds, while draft-8+ uses seconds, this precision will be lost when querying draft-7 servers, and be clamped to a minimum of one second.
-
-### VDIFF comments
-
-Throughout the codebase, comments beginning with `# VDIFF` mark sections that accommodate differences between Roughtime protocol drafts. These annotations help track changes made for compatibility and make it easier to identify code adjusted for specific draft versions.
 
 ## License
 

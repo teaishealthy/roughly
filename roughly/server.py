@@ -7,22 +7,16 @@ import os
 import string
 import struct
 import time
+from collections import defaultdict
 from random import SystemRandom
-from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, NamedTuple
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-from roughly import (
-    DELEGATION_CONTEXT_STRING,
-    DELEGATION_CONTEXT_STRING_OLD,
-    DRAFT_VERSION_ZERO,
-    GOOGLE_ROUGHTIME_SENTINEL,
-    PACKET_SIZE,
-    RESPONSE_CONTEXT_STRING,
-    TYPE_FIRST_VERSION,
+from roughly.models import (
     Certificate,
     Delegation,
     Message,
@@ -31,27 +25,30 @@ from roughly import (
     Response,
     SignedResponse,
     Tag,
+    tags,
+)
+from roughly.shared import (
+    DELEGATION_CONTEXT_STRING,
+    DELEGATION_CONTEXT_STRING_OLD,
+    DRAFT_VERSION_ZERO,
+    GOOGLE_ROUGHTIME_SENTINEL,
+    PACKET_SIZE,
+    RESPONSE_CONTEXT_STRING,
+    ProfileKey,
+    ProtocolProfile,
     build_supported_versions,
     format_versions,
     partial_sha512,
     pop_by_tag,
     pop_by_tag_optional,
-    sha512,
-    sha512_256,
-    tags,
 )
 
 random = SystemRandom()
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
 
-NONCE_SIZE = 32
-VER_7_NONCE_SIZE = 64
-MAX_DRAFT_VERSION = 0xFFFFFFFF
-
-DEFAULT_RADIUS = 3
+DEFAULT_RADIUS = int(os.environ.get("ROUGHLY_DEFAULT_RADIUS", "3"))
 CLIENT_VERSIONS_SUPPORTED = build_supported_versions(10, 15)
 
 CERT_VALIDITY = 60 * 60  # 1 hour
@@ -59,7 +56,11 @@ CERT_VALIDITY = 60 * 60  # 1 hour
 GREASE_PROBABILITY = 0.001
 
 
-def grease_add_undefined_tag(server: Server, message: Message) -> Message:  # noqa: ARG001
+def grease_add_undefined_tag(
+    server: Server,  # noqa: ARG001
+    profile: ProtocolProfile,  # noqa: ARG001
+    message: Message,
+) -> Message:
     tag_name = int.from_bytes(random.choices(string.ascii_uppercase.encode("ascii"), k=4))
     tag_value = os.urandom(random.randint(1, 16) * 4)
 
@@ -68,15 +69,19 @@ def grease_add_undefined_tag(server: Server, message: Message) -> Message:  # no
     return message
 
 
-def grease_remove_random_tag(server: Server, message: Message) -> Message:  # noqa: ARG001
+def grease_remove_random_tag(
+    server: Server,  # noqa: ARG001
+    profile: ProtocolProfile,  # noqa: ARG001
+    message: Message,
+) -> Message:
     if message.tags:
         message.tags.remove(random.choice(message.tags))
     return message
 
 
-def grease_change_version(server: Server, message: Message) -> Message:
+def grease_change_version(server: Server, profile: ProtocolProfile, message: Message) -> Message:
     srep_raw = pop_by_tag(message.tags, tags.SREP)
-    srep = SignedResponse.from_bytes(srep_raw.value)
+    srep = SignedResponse.from_bytes(srep_raw.value, profile=profile)
 
     forbidden = set(server.versions) | {srep.version}
     while True:
@@ -97,9 +102,14 @@ def grease_change_version(server: Server, message: Message) -> Message:
     return message
 
 
-def grease_change_time(server: Server, message: Message) -> Message:  # noqa: ARG001
+def grease_change_time(
+    server: Server,  # noqa: ARG001
+    profile: ProtocolProfile,
+    message: Message,
+) -> Message:
+    # draft-16 §7: incorrect times must be paired with an invalid signature.
     srep_raw = pop_by_tag(message.tags, tags.SREP)
-    srep = SignedResponse.from_bytes(srep_raw.value)
+    srep = SignedResponse.from_bytes(srep_raw.value, profile=profile)
 
     srep.midpoint = random.randint(0, 0x100000000)
     new_srep_raw = srep.to_bytes()
@@ -108,7 +118,7 @@ def grease_change_time(server: Server, message: Message) -> Message:  # noqa: AR
     return message
 
 
-GREASERS: list[Callable[[Server, Message], Message]] = [
+GREASERS: list[Callable[[Server, ProtocolProfile, Message], Message]] = [
     grease_add_undefined_tag,
     grease_remove_random_tag,
     grease_change_time,
@@ -116,7 +126,7 @@ GREASERS: list[Callable[[Server, Message], Message]] = [
 ]
 
 
-def grease_message(server: Server, message: Message) -> Message:
+def grease_message(server: Server, profile: ProtocolProfile, message: Message) -> Message:
     count = random.randint(1, len(GREASERS))
     chosen = random.sample(GREASERS, count)
 
@@ -124,7 +134,7 @@ def grease_message(server: Server, message: Message) -> Message:
     for greaser in chosen:
         snapshot = copy.deepcopy(message)
         try:
-            greaser(server, message)
+            greaser(server, profile, message)
         except Exception:  # noqa: BLE001
             logger.debug("Greaser %s failed, reverting", greaser.__name__, exc_info=True)
             message = snapshot
@@ -139,22 +149,10 @@ def grease_message(server: Server, message: Message) -> Message:
 
 
 class CertificateStore(NamedTuple):
-    old: Certificate
-    new: Certificate
-    google: Certificate
+    certs: dict[bytes, Certificate]
+    """Keyed on delegation_context bytes."""
+    google_cert: Certificate
     expiry: int
-
-
-def draft_version_boundary(
-    version: int, *, start: int | None = None, end: int | None = None
-) -> int:
-    # check if a version is within the draft version range, if so check if its in the given bounds
-    # max for draft versions is 0xffffffff
-    if DRAFT_VERSION_ZERO < version < MAX_DRAFT_VERSION:
-        if start is not None and version < start:
-            return False
-        return not (end is not None and version > end)
-    return False
 
 
 def generate_key() -> ed25519.Ed25519PrivateKey:
@@ -180,11 +178,10 @@ def create_certificate(  # noqa: PLR0913
     max_time: int,
     delegation_string: bytes,
     *,
-    google: bool | None = None,
+    cert_times_in_microseconds: bool = False,
 ) -> Certificate:
     """Create and sign a delegation certificate."""
-    # VDIFF: Google Roughtime clients expect time in microseconds
-    if google:
+    if cert_times_in_microseconds:
         min_time *= 1_000_000
         max_time *= 1_000_000
 
@@ -236,20 +233,22 @@ class Server(NamedTuple):
         now = cls.get_time()
         expiry = now + cert_validity_seconds
 
-        def make_cert(string: bytes, *, google: bool | None = None) -> Certificate:
+        def make_cert(string: bytes, *, cert_times_in_microseconds: bool = False) -> Certificate:
             return create_certificate(
                 long_term,
                 delegated,
                 now,
                 expiry,
                 string,
-                google=google,
+                cert_times_in_microseconds=cert_times_in_microseconds,
             )
 
         certificates = CertificateStore(
-            old=make_cert(DELEGATION_CONTEXT_STRING_OLD),
-            new=make_cert(DELEGATION_CONTEXT_STRING),
-            google=make_cert(DELEGATION_CONTEXT_STRING_OLD, google=True),
+            certs={
+                DELEGATION_CONTEXT_STRING: make_cert(DELEGATION_CONTEXT_STRING),
+                DELEGATION_CONTEXT_STRING_OLD: make_cert(DELEGATION_CONTEXT_STRING_OLD),
+            },
+            google_cert=make_cert(DELEGATION_CONTEXT_STRING_OLD, cert_times_in_microseconds=True),
             expiry=expiry,
         )
 
@@ -311,25 +310,15 @@ class Request(NamedTuple):
             srv=srv.value if srv else None,
         )
 
-    def validate(self, version: int) -> None:
-        # VDIFF: Validate according to the Roughtime spec for a given version
-
-        # VDIFF: TYPE tag introduced in draft-14
-        if draft_version_boundary(version, start=TYPE_FIRST_VERSION):
+    def validate(self, profile: ProtocolProfile) -> None:
+        if profile.type_tag_required:
             if self.type is None:
-                raise PacketError(f"Missing TYPE for version {version}")
+                raise PacketError(f"Missing TYPE for version {profile.version}")
             if self.type != tags.TYPE_REQUEST:
                 raise PacketError(f"Invalid TYPE {self.type}, expected {tags.TYPE_REQUEST}")
 
-        # VDIFF: NONC size differs in draft-8+
-        expected_nonce_size = VER_7_NONCE_SIZE
-        if draft_version_boundary(version, start=DRAFT_VERSION_ZERO | 7):
-            expected_nonce_size = NONCE_SIZE
-
-        if len(self.nonce) != expected_nonce_size:
-            raise PacketError(
-                f"Invalid NONC size {len(self.nonce)}, expected {expected_nonce_size}"
-            )
+        if len(self.nonce) != profile.nonce_size:
+            raise PacketError(f"Invalid NONC size {len(self.nonce)}, expected {profile.nonce_size}")
 
 
 def select_version(client: Sequence[int], server: Sequence[int]) -> int | None:
@@ -339,25 +328,14 @@ def select_version(client: Sequence[int], server: Sequence[int]) -> int | None:
     return max(common) if common else None
 
 
-def build_merkle_tree(version: int, requests: Sequence[Request]) -> tuple[bytes, list[list[bytes]]]:
-    # VDIFF: until draft-8: use sha512_256 for leaves
-    hasher = partial_sha512
-    if version <= DRAFT_VERSION_ZERO | 7:
-        hasher = sha512_256
-
-    # VDIFF: Google Roughtime uses sha512 for leaves
-    if version == GOOGLE_ROUGHTIME_SENTINEL:
-        hasher = sha512
-
+def build_merkle_tree(
+    profile: ProtocolProfile, requests: Sequence[Request]
+) -> tuple[bytes, list[list[bytes]]]:
     leaves: list[bytes] = []
 
-    # VDIFF: until draft-12: leaves are built from nonce, not full request
     for r in requests:
-        if draft_version_boundary(version, start=DRAFT_VERSION_ZERO | 12):
-            h = hasher(b"\x00" + r.raw)
-        else:
-            h = hasher(b"\x00" + r.nonce)
-        leaves.append(h)
+        raw = r.raw if profile.leaf_from_request else r.nonce
+        leaves.append(profile.hasher(b"\x00" + raw))
 
     size = 1
     while size < len(leaves):
@@ -370,7 +348,7 @@ def build_merkle_tree(version: int, requests: Sequence[Request]) -> tuple[bytes,
 
     while len(current) > 1:
         next_level = [
-            partial_sha512(b"\x01" + current[i] + current[i + 1]) for i in range(0, len(current), 2)
+            profile.hasher(b"\x01" + current[i] + current[i + 1]) for i in range(0, len(current), 2)
         ]
         levels.append(next_level)
         current = next_level
@@ -393,50 +371,38 @@ def build_response(  # noqa: PLR0913
     server: Server,
     *,
     nonce: bytes,
-    version: int,
+    profile: ProtocolProfile,
     midpoint: int,
     root: bytes,
     path: list[bytes],
     index: int,
-) -> Packet:
-    # We very much expect the client to ignore unknown tags
-    # we could also be a good programmer and handle versions properly
-    # but let's expect clients to be well-built :3
-
-    radius = server.radius
-    if version == GOOGLE_ROUGHTIME_SENTINEL:
-        # VDIFF: midpoint and radius are in microseconds for Google Roughtime
-        midpoint *= 1_000_000
-        radius *= 1_000_000
+) -> bytes:
+    midpoint_wire = midpoint * 1_000_000 if profile.midpoint_in_microseconds else midpoint
+    radius_wire = server.radius * 1_000_000 if profile.midpoint_in_microseconds else server.radius
 
     srep = SignedResponse(
-        radius=radius,
-        midpoint=midpoint,
+        radius=radius_wire,
+        midpoint=midpoint_wire,
         root=root,
-        version=version,
+        version=profile.version,
         versions=server.versions,
     )
 
-    # VDIFF: in draft-8 through draft-11, the old certificate format is used
-    # Google uses a different certificate format as well
-    cert = pick_cert(certificates=server.certificates, version=version)
-
-    resp = make_response(server, nonce, version, path, index, srep, cert)
-    return Packet(message=resp)
+    cert = pick_cert(certificates=server.certificates, profile=profile)
+    resp = make_response(server, nonce, profile, path, index, srep, cert)
+    return Packet(message=resp).dump(profile=profile)
 
 
-def pick_cert(*, certificates: CertificateStore, version: int) -> Certificate:
-    if version == GOOGLE_ROUGHTIME_SENTINEL:
-        return certificates.google
-    if DRAFT_VERSION_ZERO | 7 < version < DRAFT_VERSION_ZERO | 12:
-        return certificates.old
-    return certificates.new
+def pick_cert(*, certificates: CertificateStore, profile: ProtocolProfile) -> Certificate:
+    if not profile.packet_framing:  # Google
+        return certificates.google_cert
+    return certificates.certs[profile.delegation_context]
 
 
 def make_response(  # noqa: PLR0913
     server: Server,
     nonce: bytes,
-    version: int,
+    profile: ProtocolProfile,
     path: list[bytes],
     index: int,
     srep: SignedResponse,
@@ -448,36 +414,28 @@ def make_response(  # noqa: PLR0913
     response = Response(
         signature=sig,
         nonce=nonce,
-        type=tags.TYPE_RESPONSE if version != GOOGLE_ROUGHTIME_SENTINEL else None,
+        type=tags.TYPE_RESPONSE if profile.packet_framing else None,
         path=path,
         signed_response=srep,
         certificate=cert,
         index=index,
     )
 
-    return response.to_message(version=version)
+    return response.to_message(profile=profile)
 
 
 def handle_request(server: Server, data: bytes) -> bytes | None:
     return handle_batch(server, (data,))[0]
 
 
-def handle_batch(  # noqa: C901 TODO: refactor this function
-    server: Server,
-    requests: Sequence[bytes],
-) -> list[bytes | None]:
-    # TODO(batching): we need to ensure that a batch is compatible
-    # i.e. having to pick different hashers would break the merkle tree
-    # for now, we don't batch requests at all
-
+def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None]:
     if not requests:
         return []
 
     expected = srv_hash(server.long_term_key)
+    parsed: list[tuple[int, Request, ProtocolProfile] | None] = []
 
-    parsed: list[Request | None] = []
-
-    for data in requests:
+    for i, data in enumerate(requests):
         try:
             if len(data) < PACKET_SIZE:
                 logger.debug("Dropped request that is too small")
@@ -496,124 +454,152 @@ def handle_batch(  # noqa: C901 TODO: refactor this function
                 parsed.append(None)
                 continue
 
-            req.validate(ver)
+            profile = ProtocolProfile.from_version(ver)
+            req.validate(profile)
 
             if req.srv is not None and req.srv != expected:
                 parsed.append(None)
                 logger.debug("Dropped request with invalid SRV")
                 continue
 
-            parsed.append(req)
+            parsed.append((i, req, profile))
         except PacketError:
             logger.exception("Dropped invalid request")
             parsed.append(None)
 
-    # a poem to pyright:
-    # you must understand
-    # no, you even know.
-    # p is typed and so is i
-    # now why, oh why,
-    # why do you not see
-    # that they are not bound to be free (of Any)?
-
-    valid_requests: Sequence[Request] = ()
-    valid_idx: Sequence[int] = ()
-
-    pairs = [(p, i) for i, p in enumerate(parsed) if p]
-    if pairs:
-        valid_requests, valid_idx = zip(*((p, i) for i, p in enumerate(parsed) if p), strict=False)
-    else:
+    valid = [
+        (req_id, req, profile)
+        for entry in parsed
+        if entry is not None
+        for req_id, req, profile in (entry,)
+    ]
+    if not valid:
         return [None] * len(requests)
 
-    # TODO(batching): see above comment
-    version = cast(
-        int,
-        select_version(
-            valid_requests[0].versions,
-            server.versions,
-        ),
-    )
-
-    # we can safely drop failed requests here, i think
-    root, levels = build_merkle_tree(version, valid_requests)
+    # Group by compatibility key: (hasher, leaf_from_request)
+    groups: defaultdict[ProfileKey, list[tuple[int, Request, ProtocolProfile]]] = defaultdict(list)
+    for req_id, req, profile in valid:
+        groups[profile.key].append((req_id, req, profile))
 
     midpoint = server.get_time()
     responses: list[bytes | None] = [None] * len(requests)
 
-    for merkle_idx, (req_id, req) in enumerate(zip(valid_idx, valid_requests, strict=True)):
-        path = get_merkle_path(levels, merkle_idx)
-        packet = build_response(
-            server,
-            nonce=req.nonce,
-            # TODO(batching): select the right version here
-            version=version,
-            midpoint=midpoint,
-            root=root,
-            path=path,
-            index=merkle_idx,
-        )
-
-        if server.grease and random.random() < server.grease_probability:
-            logger.debug("Greasing response for request %d", req_id)
-            packet.message = grease_message(server, packet.message)
-
-        response = packet.dump(google=(version == GOOGLE_ROUGHTIME_SENTINEL))
-
-        if len(response) > len(req.raw):
-            # we drop responses larger than requests to avoid amplification attacks
-            logger.debug(
-                "Dropping response larger than request (response: %d, request: %d)",
-                len(response),
-                len(req.raw),
-            )
-            continue
-        responses[req_id] = response
+    for group in groups.values():
+        _process_group(server, group, midpoint, responses)
 
     return responses
 
 
+def _process_group(
+    server: Server,
+    group: list[tuple[int, Request, ProtocolProfile]],
+    midpoint: int,
+    output: list[bytes | None],
+) -> None:
+    ((_, _, profile), *_) = group
+
+    requests_only = [req for _, req, _ in group]
+    root, levels = build_merkle_tree(profile, requests_only)
+
+    midpoint_wire = midpoint * 1_000_000 if profile.midpoint_in_microseconds else midpoint
+    radius_wire = server.radius * 1_000_000 if profile.midpoint_in_microseconds else server.radius
+
+    srep = SignedResponse(
+        radius=radius_wire,
+        midpoint=midpoint_wire,
+        root=root,
+        version=profile.version,
+        versions=server.versions,
+    )
+    srep_raw = srep.to_bytes()
+    sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
+    cert = pick_cert(certificates=server.certificates, profile=profile)
+
+    for merkle_idx, (req_id, req, req_profile) in enumerate(group):
+        path = get_merkle_path(levels, merkle_idx)
+        response = Response(
+            signature=sig,
+            nonce=req.nonce,
+            type=tags.TYPE_RESPONSE if req_profile.packet_framing else None,
+            path=path,
+            signed_response=srep,
+            certificate=cert,
+            index=merkle_idx,
+        )
+        message = response.to_message(profile=req_profile)
+
+        if server.grease and random.random() < server.grease_probability:
+            logger.debug("Greasing response for request %d", req_id)
+            message = grease_message(server, req_profile, message)
+
+        raw = Packet(message=message).dump(profile=req_profile)
+        if len(raw) > len(req.raw):
+            logger.debug(
+                "Dropping response larger than request (response: %d, request: %d)",
+                len(raw),
+                len(req.raw),
+            )
+            continue
+        output[req_id] = raw
+
+
 class UDPHandler(asyncio.DatagramProtocol):
-    def __init__(self, server: Server) -> None:
+    def __init__(self, server: Server, *, window_ms: float = 5.0) -> None:
         self.server = server
+        self.window_ms = window_ms
         self.transport: asyncio.DatagramTransport | None = None
+        self.queue: asyncio.Queue[tuple[bytes, tuple[str, int]]] = asyncio.Queue()
+        self._task: asyncio.Task[None] | None = None
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
+        self._task = asyncio.get_event_loop().create_task(_batch_processor(self))
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        if self.server.certificates.expiry < self.server.get_time():
+        self.queue.put_nowait((data, addr))
+
+    def connection_lost(self, exc: Exception | None) -> None:  # noqa: ARG002
+        if self._task:
+            self._task.cancel()
+
+
+async def _batch_processor(handler: UDPHandler) -> None:
+    while True:
+        batch = [await handler.queue.get()]
+        deadline = asyncio.get_event_loop().time() + handler.window_ms / 1000
+        while (remaining := deadline - asyncio.get_event_loop().time()) > 0:
+            try:
+                batch.append(await asyncio.wait_for(handler.queue.get(), timeout=remaining))
+            except TimeoutError:
+                break
+
+        if handler.server.certificates.expiry < handler.server.get_time():
             logger.info("Server key expired, refreshing")
-            self.server = self.server.refresh()
+            handler.server = handler.server.refresh()
 
-        host, port, *_ = addr
+        raw_list = [data for data, _ in batch]
+        addrs = [addr for _, addr in batch]
+        responses = handle_batch(handler.server, raw_list)
 
-        logger.debug("Received datagram from %s:%d", host, port)
-        try:
-            resp = handle_request(self.server, data)
-            if resp and self.transport:
-                self.transport.sendto(resp, addr)
-                logger.debug("Sent response to %s:%d", host, port)
-            else:
-                logger.debug("No response sent to %s:%d", host, port)
-        except Exception:
-            logger.exception("Error handling request from %s:%d", host, port)
+        if handler.transport:
+            for resp, addr in zip(responses, addrs, strict=True):
+                if resp:
+                    handler.transport.sendto(resp, addr)
 
 
 async def serve(
     server: Server,
     host: str = "0.0.0.0",  # noqa: S104
     port: int = 2002,
-    handler: type[UDPHandler] = UDPHandler,
 ) -> None:
     """Start a Roughtime server.
 
     Args:
         server (Server): The server to run.
-        port (int, optional): The port to listen on. Defaults to 2002.
         host (str, optional): The host to bind to. Defaults to "0.0.0.0"
-        handler (type[UDPHandler], optional): The UDP handler class to use. Defaults to UDPHandler.
+        port (int, optional): The port to listen on. Defaults to 2002.
     """
-    transport = await _start_server(server, host, port, handler)
+    transport = await _start_server(lambda: UDPHandler(server), host, port)
 
     try:
         await asyncio.Event().wait()
@@ -622,22 +608,11 @@ async def serve(
 
 
 async def _start_server(
-    server: Server,
+    factory: Callable[[], asyncio.DatagramProtocol],
     host: str,
     port: int,
-    handler: type[UDPHandler],
-    *,
-    loop: asyncio.AbstractEventLoop | None = None,
 ) -> asyncio.DatagramTransport:
-    if not loop:
-        loop = asyncio.get_running_loop()
-
-    transport, _ = await loop.create_datagram_endpoint(
-        lambda: handler(server), local_addr=(host, port)
-    )
+    loop = asyncio.get_running_loop()
+    transport, _ = await loop.create_datagram_endpoint(factory, local_addr=(host, port))
     logger.info("Listening on %s:%d", host, port)
-    logger.debug(
-        "Running with supported versions: %s + Google Roughtime", format_versions(server.versions)
-    )
-
     return transport

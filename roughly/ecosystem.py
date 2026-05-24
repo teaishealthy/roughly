@@ -9,13 +9,12 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
-from roughly import (
+from roughly.client import VerifiableResponse, send_request
+from roughly.errors import VerificationError
+from roughly.shared import (
     DRAFT_VERSION_ZERO,
     RoughtimeError,
-    VerifiableResponse,
-    VerificationError,
     partial_sha512,
-    send_request,
 )
 
 if TYPE_CHECKING:
