@@ -8,14 +8,16 @@ import string
 import struct
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from random import SystemRandom
 from typing import TYPE_CHECKING, NamedTuple
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Generator, Sequence
 
+from roughly.errors import RoughtimeError
 from roughly.models import (
     Certificate,
     Delegation,
@@ -428,6 +430,14 @@ def handle_request(server: Server, data: bytes) -> bytes | None:
     return handle_batch(server, (data,))[0]
 
 
+@contextmanager
+def _rethrow(old: type[BaseException], new: type[BaseException]) -> Generator[None, None, None]:
+    try:
+        yield
+    except old as e:
+        raise new from e
+
+
 def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None]:
     if not requests:
         return []
@@ -442,7 +452,9 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
                 parsed.append(None)
                 continue
 
-            req = Request.from_bytes(data)
+            with _rethrow(RoughtimeError, PacketError):
+                req = Request.from_bytes(data)
+
             ver = select_version(req.versions, server.versions)
 
             if ver is None:
@@ -455,7 +467,9 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
                 continue
 
             profile = ProtocolProfile.from_version(ver)
-            req.validate(profile)
+
+            with _rethrow(RoughtimeError, PacketError):
+                req.validate(profile)
 
             if req.srv is not None and req.srv != expected:
                 parsed.append(None)
