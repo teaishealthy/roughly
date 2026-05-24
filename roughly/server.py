@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
+import string
 import struct
 import time
 from collections import defaultdict
+from random import SystemRandom
 from typing import TYPE_CHECKING, NamedTuple
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -21,11 +24,13 @@ from roughly.models import (
     PacketError,
     Response,
     SignedResponse,
+    Tag,
     tags,
 )
 from roughly.shared import (
     DELEGATION_CONTEXT_STRING,
     DELEGATION_CONTEXT_STRING_OLD,
+    DRAFT_VERSION_ZERO,
     GOOGLE_ROUGHTIME_SENTINEL,
     PACKET_SIZE,
     RESPONSE_CONTEXT_STRING,
@@ -38,6 +43,8 @@ from roughly.shared import (
     pop_by_tag_optional,
 )
 
+random = SystemRandom()
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +52,100 @@ DEFAULT_RADIUS = int(os.environ.get("ROUGHLY_DEFAULT_RADIUS", "3"))
 CLIENT_VERSIONS_SUPPORTED = build_supported_versions(10, 15)
 
 CERT_VALIDITY = 60 * 60  # 1 hour
+
+GREASE_PROBABILITY = 0.001
+
+
+def grease_add_undefined_tag(
+    server: Server,  # noqa: ARG001
+    profile: ProtocolProfile,  # noqa: ARG001
+    message: Message,
+) -> Message:
+    tag_name = int.from_bytes(random.choices(string.ascii_uppercase.encode("ascii"), k=4))
+    tag_value = os.urandom(random.randint(1, 16) * 4)
+
+    message.tags.append(Tag(tag=tag_name, value=tag_value))
+    message.tags.sort(key=lambda t: t.tag)
+    return message
+
+
+def grease_remove_random_tag(
+    server: Server,  # noqa: ARG001
+    profile: ProtocolProfile,  # noqa: ARG001
+    message: Message,
+) -> Message:
+    if message.tags:
+        message.tags.remove(random.choice(message.tags))
+    return message
+
+
+def grease_change_version(server: Server, profile: ProtocolProfile, message: Message) -> Message:
+    srep_raw = pop_by_tag(message.tags, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_raw.value, profile=profile)
+
+    forbidden = set(server.versions) | {srep.version}
+    while True:
+        candidate = DRAFT_VERSION_ZERO | random.randint(20, 0xFFFF)
+        if candidate not in forbidden:
+            break
+    srep.version = candidate
+
+    new_srep_raw = srep.to_bytes()
+    new_sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + new_srep_raw)
+
+    sig_tag = pop_by_tag(message.tags, tags.SIG)
+    sig_tag.value = new_sig
+
+    message.tags.append(Tag(tag=tags.SREP, value=new_srep_raw))
+    message.tags.append(sig_tag)
+    message.tags.sort(key=lambda t: t.tag)
+    return message
+
+
+def grease_change_time(
+    server: Server,  # noqa: ARG001
+    profile: ProtocolProfile,
+    message: Message,
+) -> Message:
+    # draft-16 §7: incorrect times must be paired with an invalid signature.
+    srep_raw = pop_by_tag(message.tags, tags.SREP)
+    srep = SignedResponse.from_bytes(srep_raw.value, profile=profile)
+
+    srep.midpoint = random.randint(0, 0x100000000)
+    new_srep_raw = srep.to_bytes()
+    message.tags.append(Tag(tag=tags.SREP, value=new_srep_raw))
+    message.tags.sort(key=lambda t: t.tag)
+    return message
+
+
+GREASERS: list[Callable[[Server, ProtocolProfile, Message], Message]] = [
+    grease_add_undefined_tag,
+    grease_remove_random_tag,
+    grease_change_time,
+    grease_change_version,
+]
+
+
+def grease_message(server: Server, profile: ProtocolProfile, message: Message) -> Message:
+    count = random.randint(1, len(GREASERS))
+    chosen = random.sample(GREASERS, count)
+
+    applied = 0
+    for greaser in chosen:
+        snapshot = copy.deepcopy(message)
+        try:
+            greaser(server, profile, message)
+        except Exception:  # noqa: BLE001
+            logger.debug("Greaser %s failed, reverting", greaser.__name__, exc_info=True)
+            message = snapshot
+            continue
+        logger.debug("Applied greaser: %s", greaser.__name__)
+        applied += 1
+
+    if applied == 0:
+        logger.warning("No greasers managed to apply.")
+
+    return message
 
 
 class CertificateStore(NamedTuple):
@@ -103,23 +204,29 @@ class Server(NamedTuple):
     validity_seconds: int | None
     radius: int
     versions: tuple[int, ...]
+    grease: bool
+    grease_probability: float
 
     @staticmethod
     def get_time() -> int:
         return int(time.time())
 
     @classmethod
-    def create(
+    def create(  # noqa: PLR0913
         cls,
         private_key: bytes | None = None,
         *,
         validity_seconds: int | None = None,
         radius: int = DEFAULT_RADIUS,
         versions: Sequence[int] | None = None,
+        grease: bool = False,
+        grease_probability: float | None = None,
     ) -> Server:
         cert_validity_seconds = validity_seconds
         if cert_validity_seconds is None:
             cert_validity_seconds = CERT_VALIDITY
+        if grease_probability is None:
+            grease_probability = GREASE_PROBABILITY
 
         long_term = load_key(private_key) if private_key else generate_key()
         delegated = generate_key()
@@ -152,6 +259,8 @@ class Server(NamedTuple):
             validity_seconds=validity_seconds,
             radius=radius,
             versions=tuple(versions or CLIENT_VERSIONS_SUPPORTED),
+            grease=grease,
+            grease_probability=grease_probability,
         )
 
     def refresh(self) -> Server:
@@ -160,6 +269,8 @@ class Server(NamedTuple):
             validity_seconds=self.validity_seconds,
             radius=self.radius,
             versions=self.versions,
+            grease=self.grease,
+            grease_probability=self.grease_probability,
         )
 
 
@@ -415,7 +526,13 @@ def _process_group(
             certificate=cert,
             index=merkle_idx,
         )
-        raw = Packet(message=response.to_message(profile=req_profile)).dump(profile=req_profile)
+        message = response.to_message(profile=req_profile)
+
+        if server.grease and random.random() < server.grease_probability:
+            logger.debug("Greasing response for request %d", req_id)
+            message = grease_message(server, req_profile, message)
+
+        raw = Packet(message=message).dump(profile=req_profile)
         if len(raw) > len(req.raw):
             logger.debug(
                 "Dropping response larger than request (response: %d, request: %d)",
