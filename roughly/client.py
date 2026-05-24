@@ -251,10 +251,36 @@ class VerifiableResponse(Response):
 
         return h == self.signed_response.root
 
-    def verify(self, long_term_public_key_bytes: bytes) -> bool:
+    def verify(self, long_term_public_key_bytes: bytes) -> bool:  # noqa: C901
         delegation_context_string = self._profile.delegation_context
 
         # 5.4. Validity of Response
+
+        # Structural checks on the signed response (§5.2.5).
+        srep = self.signed_response
+
+        # §5.2.5 L691: RADI MUST NOT be zero.
+        if srep.radius == 0:
+            raise VerificationError("RADI must not be zero", reason="radius")
+
+        # §5.2.5 L701-704: VERS structure (skip Google profile, which has no VERS tag).
+        if srep.versions:
+            if len(srep.versions) > 32:  # noqa: PLR2004
+                raise VerificationError(
+                    f"VERS contains {len(srep.versions)} entries (max 32)",
+                    reason="versions",
+                )
+            for prev, curr in zip(srep.versions, srep.versions[1:], strict=False):
+                if curr <= prev:
+                    raise VerificationError(
+                        "VERS must be strictly ascending and unique",
+                        reason="versions",
+                    )
+            if srep.version not in srep.versions:
+                raise VerificationError(
+                    f"VERS does not contain the response version {srep.version:#x}",
+                    reason="versions",
+                )
 
         # The signature in CERT was made with the long-term key of the server.
         long_term_public_key = ed25519.Ed25519PublicKey.from_public_bytes(

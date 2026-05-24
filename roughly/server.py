@@ -322,6 +322,11 @@ class Request(NamedTuple):
         if len(self.nonce) != profile.nonce_size:
             raise PacketError(f"Invalid NONC size {len(self.nonce)}, expected {profile.nonce_size}")
 
+        # §5.1.1 L517: VER MUST be sorted ascending and MUST NOT repeat.
+        for prev, curr in zip(self.versions, self.versions[1:], strict=False):
+            if curr <= prev:
+                raise PacketError("VER list must be strictly ascending and unique")
+
 
 def select_version(client: Sequence[int], server: Sequence[int]) -> int | None:
     if GOOGLE_ROUGHTIME_SENTINEL in client:
@@ -424,7 +429,6 @@ def make_response(  # noqa: PLR0913
     )
 
     return response.to_message(profile=profile)
-
 
 
 @contextmanager

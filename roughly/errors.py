@@ -8,7 +8,14 @@ __all__ = (
     "VerificationError",
 )
 
-RoughtimeErrorReason = Literal["merkle", "key-age", "signature-certificate", "signature-response"]
+RoughtimeErrorReason = Literal[
+    "merkle",
+    "key-age",
+    "signature-certificate",
+    "signature-response",
+    "radius",
+    "versions",
+]
 
 
 class RoughtimeError(Exception):

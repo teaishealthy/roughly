@@ -9,6 +9,7 @@ from typing import TypedDict
 import pytest
 
 import roughly.client
+import roughly.errors
 import roughly.models
 import roughly.server
 import roughly.shared
@@ -94,7 +95,10 @@ def test_replay_server(packet: PacketEntry) -> None:
     req = roughly.server.Request.from_bytes(packet["request"])
     version = roughly.server.select_version(req.versions, roughly.server.CLIENT_VERSIONS_SUPPORTED)
     assert version is not None, "No compatible version found"
-    req.validate(roughly.server.ProtocolProfile.from_version(version))
+    try:
+        req.validate(roughly.server.ProtocolProfile.from_version(version))
+    except roughly.errors.PacketError as e:
+        pytest.skip(f"Captured request from {packet['other']} is non-spec-compliant: {e}")
 
     responses = roughly.server.handle_batch(server, (req.raw,))
 

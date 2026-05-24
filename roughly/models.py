@@ -115,11 +115,19 @@ class Message:
 
         for _ in range(num_pairs - 1):
             (offset,) = struct.unpack("<I", reader.read(4))
+            if offset % 4 != 0:
+                raise PacketError(f"Tag value offset {offset} is not a multiple of 4")
+            if offset < offsets[-1]:
+                raise PacketError("Tag value offsets must be non-decreasing")
             offsets.append(offset)
 
         tags: list[int] = []
         for _ in range(num_pairs):
             (tag,) = struct.unpack("<I", reader.read(4))
+            if tags and tag <= tags[-1]:
+                raise PacketError(
+                    f"Tags must be strictly ascending; {tag:#x} follows {tags[-1]:#x}"
+                )
             tags.append(tag)
 
         values_start = reader.tell()
@@ -165,8 +173,10 @@ class Packet:
 
             raise PacketError(f"Expected magic {cls.magic:#x}, got {magic:#x}")
 
-        if len(data) < 12 + msg_len:
-            raise PacketError("Packet data is shorter than declared message length")
+        if len(data) != 12 + msg_len:
+            raise PacketError(
+                f"Packet length {len(data)} does not match declared message length {msg_len}"
+            )
 
         msg_data = data[12 : 12 + msg_len]
         message = Message.from_bytes(msg_data)
