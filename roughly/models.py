@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import io
 import struct
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -17,9 +16,8 @@ from roughly.shared import (
     always,
     convert_mjd_to_unix,
     find_by_tag,
+    get_by_tag,
     microseconds_to_seconds,
-    pop_by_tag,
-    pop_by_tag_optional,
     split_into_chunks,
 )
 
@@ -106,40 +104,40 @@ class Message:
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Message:
-        reader = io.BytesIO(data)
-        (num_pairs,) = struct.unpack("<I", reader.read(4))
+        (num_pairs,) = struct.unpack_from("<I", data, 0)
         if num_pairs == 0:
             raise PacketError("Message contains zero tag-value pairs")
 
-        offsets = [0]
+        offsets_count = num_pairs - 1
+        offsets_end = 4 + offsets_count * 4
+        tags_end = offsets_end + num_pairs * 4
 
-        for _ in range(num_pairs - 1):
-            (offset,) = struct.unpack("<I", reader.read(4))
+        raw_offsets: tuple[int, ...] = (
+            struct.unpack_from(f"<{offsets_count}I", data, 4) if offsets_count else ()
+        )
+        raw_tags: tuple[int, ...] = struct.unpack_from(f"<{num_pairs}I", data, offsets_end)
+
+        offsets = [0, *raw_offsets]
+        for i in range(offsets_count):
+            offset = offsets[i + 1]
             if offset % 4 != 0:
                 raise PacketError(f"Tag value offset {offset} is not a multiple of 4")
-            if offset < offsets[-1]:
+            if offset < offsets[i]:
                 raise PacketError("Tag value offsets must be non-decreasing")
-            offsets.append(offset)
 
-        tags: list[int] = []
-        for _ in range(num_pairs):
-            (tag,) = struct.unpack("<I", reader.read(4))
-            if tags and tag <= tags[-1]:
+        for i in range(1, num_pairs):
+            if raw_tags[i] <= raw_tags[i - 1]:
                 raise PacketError(
-                    f"Tags must be strictly ascending; {tag:#x} follows {tags[-1]:#x}"
+                    f"Tags must be strictly ascending; "
+                    f"{raw_tags[i]:#x} follows {raw_tags[i - 1]:#x}"
                 )
-            tags.append(tag)
 
-        values_start = reader.tell()
-        values_data = data[values_start:]
-
+        values_data = data[tags_end:]
         tag_list: list[Tag] = []
         for i in range(num_pairs):
             start = offsets[i]
             end = offsets[i + 1] if i + 1 < num_pairs else len(values_data)
-            val_data = values_data[start:end]
-
-            tag_list.append(Tag(tag=tags[i], value=val_data))
+            tag_list.append(Tag(tag=raw_tags[i], value=values_data[start:end]))
 
         return cls(tags=tag_list)
 
@@ -194,11 +192,11 @@ class SignedResponse:
     @classmethod
     def from_bytes(cls, data: bytes, *, profile: ProtocolProfile) -> SignedResponse:
         message = Message.from_bytes(data)
-        radius_tag = pop_by_tag(message.tags, tags.RADI)
-        midpoint_tag = pop_by_tag(message.tags, tags.MIDP)
-        versions_tag = pop_by_tag_optional(message.tags, tags.VERS)
-        version_tag = pop_by_tag_optional(message.tags, tags.VER)
-        root_tag = pop_by_tag(message.tags, tags.ROOT)
+        radius_tag = get_by_tag(message.tags, tags.RADI)
+        midpoint_tag = get_by_tag(message.tags, tags.MIDP)
+        versions_tag = find_by_tag(message.tags, tags.VERS)
+        version_tag = find_by_tag(message.tags, tags.VER)
+        root_tag = get_by_tag(message.tags, tags.ROOT)
         (radius,) = struct.unpack("<I", radius_tag.value)
         (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
 
@@ -252,9 +250,9 @@ class Delegation:
     def from_bytes(cls, data: bytes, *, profile: ProtocolProfile) -> Delegation:
         dele_message = Message.from_bytes(data)
 
-        pubk_tag = pop_by_tag(dele_message.tags, tags.PUBK)
-        mint_tag = pop_by_tag(dele_message.tags, tags.MINT)
-        maxt_tag = pop_by_tag(dele_message.tags, tags.MAXT)
+        pubk_tag = get_by_tag(dele_message.tags, tags.PUBK)
+        mint_tag = get_by_tag(dele_message.tags, tags.MINT)
+        maxt_tag = get_by_tag(dele_message.tags, tags.MAXT)
 
         public_key = pubk_tag.value
         (min_time,) = struct.unpack("<Q", mint_tag.value)
@@ -290,10 +288,10 @@ class Certificate:
     @classmethod
     def from_bytes(cls, data: bytes, *, profile: ProtocolProfile) -> Certificate:
         message = Message.from_bytes(data)
-        dele_tag = pop_by_tag(message.tags, tags.DELE)
+        dele_tag = get_by_tag(message.tags, tags.DELE)
         delegation = Delegation.from_bytes(dele_tag.value, profile=profile)
 
-        signature_tag = pop_by_tag(message.tags, tags.SIG)
+        signature_tag = get_by_tag(message.tags, tags.SIG)
         signature = signature_tag.value
 
         return cls(delegation=delegation, signature=signature)
@@ -382,21 +380,21 @@ class Response:
         Returns the Response and the raw bytes of DELE and SREP tags
         (needed for signature verification).
         """
-        tag_list = message.tags.copy()
-        sig = pop_by_tag(tag_list, tags.SIG)
-        nonc = pop_by_tag(tag_list, tags.NONC)
+        sig = get_by_tag(message.tags, tags.SIG)
+        nonc = get_by_tag(message.tags, tags.NONC)
 
-        type = pop_by_tag_optional(tag_list, tags.TYPE)
-        if type is not None:
-            (type,) = struct.unpack("<I", type.value)
+        type_tag = find_by_tag(message.tags, tags.TYPE)
+        type = None
+        if type_tag is not None:
+            (type,) = struct.unpack("<I", type_tag.value)
 
             if type != tags.TYPE_RESPONSE:
                 raise PacketError(f"Expected TYPE_RESPONSE, got {type}")
 
-        path = pop_by_tag(tag_list, tags.PATH)
-        srep = pop_by_tag(tag_list, tags.SREP)
-        cert = pop_by_tag(tag_list, tags.CERT)
-        indx = pop_by_tag(tag_list, tags.INDX)
+        path = get_by_tag(message.tags, tags.PATH)
+        srep = get_by_tag(message.tags, tags.SREP)
+        cert = get_by_tag(message.tags, tags.CERT)
+        indx = get_by_tag(message.tags, tags.INDX)
 
         # Extract raw DELE bytes from CERT for signature verification
         cert_msg = Message.from_bytes(cert.value)

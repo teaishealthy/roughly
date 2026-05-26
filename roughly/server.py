@@ -8,14 +8,14 @@ import string
 import struct
 import time
 from collections import defaultdict
-from contextlib import contextmanager
+from itertools import pairwise
 from random import SystemRandom
 from typing import TYPE_CHECKING, NamedTuple
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Sequence
+    from collections.abc import Callable, Sequence
 
 from roughly.errors import RoughtimeError
 from roughly.models import (
@@ -39,10 +39,11 @@ from roughly.shared import (
     ProfileKey,
     ProtocolProfile,
     build_supported_versions,
+    find_by_tag,
     format_versions,
+    get_by_tag,
     partial_sha512,
     pop_by_tag,
-    pop_by_tag_optional,
 )
 
 random = SystemRandom()
@@ -279,7 +280,7 @@ class Server(NamedTuple):
 class Request(NamedTuple):
     raw: bytes
 
-    versions: list[int]
+    versions: tuple[int, ...]
     nonce: bytes
 
     type: int | None
@@ -288,20 +289,20 @@ class Request(NamedTuple):
     @classmethod
     def from_bytes(cls, data: bytes) -> Request:
         packet = Packet.from_bytes(data)
-        tag_list = packet.message.tags.copy()
+        msg_tags = packet.message.tags
 
-        ver = pop_by_tag_optional(tag_list, tags.VER)
+        ver = find_by_tag(msg_tags, tags.VER)
         if ver:
-            versions = list(struct.unpack(f"<{len(ver.value) // 4}I", ver.value))
+            versions = struct.unpack(f"<{len(ver.value) // 4}I", ver.value)
         else:
-            versions = [GOOGLE_ROUGHTIME_SENTINEL]
+            versions = (GOOGLE_ROUGHTIME_SENTINEL,)
 
-        nonc = pop_by_tag(tag_list, tags.NONC)
+        nonc = get_by_tag(msg_tags, tags.NONC)
 
-        typ = pop_by_tag_optional(tag_list, tags.TYPE)
+        typ = find_by_tag(msg_tags, tags.TYPE)
         type = struct.unpack("<I", typ.value)[0] if typ else None
 
-        srv = pop_by_tag_optional(tag_list, tags.SRV)
+        srv = find_by_tag(msg_tags, tags.SRV)
         # always an optional tag
 
         return Request(
@@ -324,15 +325,15 @@ class Request(NamedTuple):
 
         if profile.sorted_versions:
             # §5.1.1 L517: VER MUST be sorted ascending and MUST NOT repeat.
-            for prev, curr in zip(self.versions, self.versions[1:], strict=False):
+            for prev, curr in pairwise(self.versions):
                 if curr <= prev:
                     raise PacketError("VER list must be strictly ascending and unique")
 
 
-def select_version(client: Sequence[int], server: Sequence[int]) -> int | None:
+def select_version(client: Sequence[int], server_set: frozenset[int]) -> int | None:
     if GOOGLE_ROUGHTIME_SENTINEL in client:
         return GOOGLE_ROUGHTIME_SENTINEL
-    common = set(client) & set(server)
+    common = set(client) & server_set
     return max(common) if common else None
 
 
@@ -432,12 +433,6 @@ def make_response(  # noqa: PLR0913
     return response.to_message(profile=profile)
 
 
-@contextmanager
-def _rethrow(old: type[BaseException], new: type[BaseException]) -> Generator[None, None, None]:
-    try:
-        yield
-    except old as e:
-        raise new from e
 
 
 def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None]:
@@ -445,6 +440,7 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
         return []
 
     expected = srv_hash(server.long_term_key)
+    server_versions_set = frozenset(server.versions)
     parsed: list[tuple[int, Request, ProtocolProfile] | None] = []
 
     for i, data in enumerate(requests):
@@ -454,10 +450,9 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
                 parsed.append(None)
                 continue
 
-            with _rethrow(RoughtimeError, PacketError):
-                req = Request.from_bytes(data)
+            req = Request.from_bytes(data)
 
-            ver = select_version(req.versions, server.versions)
+            ver = select_version(req.versions, server_versions_set)
 
             if ver is None:
                 logger.debug(
@@ -470,8 +465,7 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
 
             profile = ProtocolProfile.from_version(ver)
 
-            with _rethrow(RoughtimeError, PacketError):
-                req.validate(profile)
+            req.validate(profile)
 
             if req.srv is not None and req.srv != expected:
                 parsed.append(None)
@@ -479,7 +473,7 @@ def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None
                 continue
 
             parsed.append((i, req, profile))
-        except PacketError:
+        except RoughtimeError:
             logger.exception("Dropped invalid request")
             parsed.append(None)
 

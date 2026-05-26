@@ -93,7 +93,7 @@ def test_replay_server(packet: PacketEntry) -> None:
     server = roughly.server.Server.create(private_key=PRIVATE_KEY)
 
     req = roughly.server.Request.from_bytes(packet["request"])
-    version = roughly.server.select_version(req.versions, roughly.server.CLIENT_VERSIONS_SUPPORTED)
+    version = roughly.server.select_version(req.versions, frozenset(roughly.server.CLIENT_VERSIONS_SUPPORTED))
     assert version is not None, "No compatible version found"
     try:
         req.validate(roughly.server.ProtocolProfile.from_version(version))

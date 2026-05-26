@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
@@ -93,6 +94,7 @@ class ProtocolProfile:
         return (self.hasher, self.leaf_from_request)
 
     @staticmethod
+    @functools.cache
     def from_version(version: int) -> ProtocolProfile:
         """Return the ProtocolProfile for a given Roughtime version."""
         if version == 1:
@@ -201,6 +203,14 @@ def find_by_tag(tag_list: Iterable[Tag], tag_value: int) -> Tag | None:
         if tag.tag == tag_value:
             return tag
     return None
+
+
+def get_by_tag(tag_list: Iterable[Tag], tag_value: int) -> Tag:
+    result = find_by_tag(tag_list, tag_value)
+    if result is not None:
+        return result
+    ascii_repr = tag_value.to_bytes(4, "little").decode("ascii", errors="replace")
+    raise RoughtimeError(f"Tag {ascii_repr} not found")
 
 
 def index_by_tag(tag_list: Iterable[Tag], tag_value: int) -> int | None:
