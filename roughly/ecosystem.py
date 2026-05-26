@@ -13,6 +13,7 @@ from roughly.client import VerifiableResponse, send_request
 from roughly.errors import VerificationError
 from roughly.shared import (
     DRAFT_VERSION_ZERO,
+    LATEST_WIRE_VERSION,
     RoughtimeError,
     partial_sha512,
 )
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 VERSION_LOOKUP: dict[str, int] = {
     "IETF-Roughtime": DRAFT_VERSION_ZERO | 7,
     "Google-Roughtime": 3000600613,
+    "1": LATEST_WIRE_VERSION,
 }
 
 logger = logging.getLogger(__name__)

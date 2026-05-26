@@ -26,6 +26,7 @@ DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 
 DRAFT_VERSION_ZERO = 0x80000000
+LATEST_WIRE_VERSION = DRAFT_VERSION_ZERO | 12
 
 # The actual value is not important, we just need a unique sentinel
 # that doesn't make sense semantically
