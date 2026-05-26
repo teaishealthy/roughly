@@ -80,17 +80,22 @@ Additionally you might want to consider turning off response greasing while test
 ```python
 import roughly.client
 
+# <snip!>
+
 response = await roughly.client.send_request(
     host="time.teax.dev",
     port=2002,
-    public_key=base64.b64decode(b"84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg=")
+    public_key=base64.b64decode(b"84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg="),
 )
-# Responses are always verified before being returned
-
-print("Current time:", response.signed_response.midpoint)
+midpoint = response.signed_response.midpoint
+radius = response.signed_response.radius
+print(f"time: {midpoint} ± {radius}s")
 ```
 
-You can also use the built-in ecosystem tools to query multiple servers and check for malfeasance as described in the RFC.
+`send_request` verifies the response before returning. Any failure raises `roughly.errors.VerificationError`; malformed packets raise `PacketError`. Both inherit from `RoughtimeError`. Once you have a response, true time is somewhere in the range `[midpoint - radius, midpoint + radius]`.
+
+An *ecosystem* is a list of servers a client can query.
+`roughly.ecosystem` provides a flow for querying them and checking for disagreement:
 
 ```python
 from pathlib import Path
@@ -115,18 +120,20 @@ if confirm_malfeasance(report):
         json.dump(report, f, indent=2)
 ```
 
+`pick_servers` filters down to servers that are actually reachable right now. `query_servers` returns one `(VerifiableResponse, raw_bytes)` per server. `confirm_malfeasance` returns true when the responses can't all be true at the same time.
+
 #### Running a server
 
-You can also programmatically run your own Roughtime server:
+You can also programmatically run your own Roughtime server. `Server.create()` mints a long-term ed25519 keypair on each call, so for any server clients should be able to keep talking to across restarts, pass `private_key=...` with a key you've persisted yourself:
 
 ```python
 import roughly.server
 
-server = roughly.server.Server.create() # generates a new keypair
+server = roughly.server.Server.create() # generates a fresh keypair
 await roughly.server.serve(server)
 ```
 
-Why? You can subclass `roughly.server.UDPHandler` and `roughly.server.Server` to implement custom behavior. Like a malfeasant server for testing:
+The reason to use the library directly instead of the CLI is that both `roughly.server.Server` and `roughly.server.UDPHandler` are designed to be extended. A sample use case is a deliberately malfeasant server:
 
 ```python
 import roughly
