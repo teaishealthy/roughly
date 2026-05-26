@@ -178,7 +178,7 @@ def always(x: T | None) -> T:  # noqa: UP047
 
 
 def pop_by_tag(tag_list: MutableSequence[Tag], tag_value: int) -> Tag:
-    result = find_by_predicate(tag_list, lambda t: t.tag == tag_value)
+    result = index_by_tag(tag_list, tag_value)
     if result is not None:
         return tag_list.pop(result)
     ascii_repr = tag_value.to_bytes(4, "little").decode("ascii", errors="replace")
@@ -186,17 +186,22 @@ def pop_by_tag(tag_list: MutableSequence[Tag], tag_value: int) -> Tag:
 
 
 def pop_by_tag_optional(tag_list: MutableSequence[Tag], tag_value: int) -> Tag | None:
-    result = find_by_predicate(tag_list, lambda t: t.tag == tag_value)
+    result = index_by_tag(tag_list, tag_value)
     if result is not None:
         return tag_list.pop(result)
     return None
 
 
-def find_by_predicate(
-    tag_list: MutableSequence[Tag], predicate: Callable[[Tag], bool]
-) -> int | None:
+def find_by_tag(tag_list: Iterable[Tag], tag_value: int) -> Tag | None:
+    for tag in tag_list:
+        if tag.tag == tag_value:
+            return tag
+    return None
+
+
+def index_by_tag(tag_list: Iterable[Tag], tag_value: int) -> int | None:
     for i, tag in enumerate(tag_list):
-        if predicate(tag):
+        if tag.tag == tag_value:
             return i
     return None
 

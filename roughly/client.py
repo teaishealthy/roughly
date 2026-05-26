@@ -24,7 +24,7 @@ from roughly.shared import (
     RESPONSE_CONTEXT_STRING,
     VERSIONS_SUPPORTED,
     ProtocolProfile,
-    find_by_predicate,
+    find_by_tag,
     partial_sha512,
     pop_by_tag,
 )
@@ -183,10 +183,10 @@ class VerifiableResponse(Response):
     def version(self) -> int:
         """The version of the response."""
         if not self.signed_response.version:
-            result = find_by_predicate(self.packet.message.tags, lambda t: t.tag == tags.VER)
+            result = find_by_tag(self.packet.message.tags, tags.VER)
             if result is None:
                 raise PacketError("No VER tag found in response packet")
-            (version,) = struct.unpack("<I", self.packet.message.tags[result].value[:4])
+            (version,) = struct.unpack("<I", result.value[:4])
             return version
 
         return self.signed_response.version
@@ -195,9 +195,9 @@ class VerifiableResponse(Response):
     def from_packet(cls, *, raw: bytes, request: bytes) -> VerifiableResponse:
         p = Packet.from_bytes(raw)
 
-        ver_result = find_by_predicate(p.message.tags, lambda t: t.tag == tags.VER)
+        ver_result = find_by_tag(p.message.tags, tags.VER)
         if ver_result is not None:
-            (wire_ver,) = struct.unpack("<I", p.message.tags[ver_result].value)
+            (wire_ver,) = struct.unpack("<I", ver_result.value)
         else:
             wire_ver = GOOGLE_ROUGHTIME_SENTINEL
         wire_profile = ProtocolProfile.from_version(wire_ver)

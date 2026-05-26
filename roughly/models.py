@@ -16,7 +16,7 @@ from roughly.shared import (
     ProtocolProfile,
     always,
     convert_mjd_to_unix,
-    find_by_predicate,
+    find_by_tag,
     microseconds_to_seconds,
     pop_by_tag,
     pop_by_tag_optional,
@@ -400,8 +400,7 @@ class Response:
 
         # Extract raw DELE bytes from CERT for signature verification
         cert_msg = Message.from_bytes(cert.value)
-        dele_idx = always(find_by_predicate(cert_msg.tags, lambda t: t.tag == tags.DELE))
-        dele_raw = cert_msg.tags[dele_idx].value
+        dele = always(find_by_tag(cert_msg.tags, tags.DELE))
 
         response = cls(
             signature=sig.value,
@@ -413,4 +412,4 @@ class Response:
             index=struct.unpack("<I", indx.value)[0],
         )
 
-        return response, dele_raw, srep.value
+        return response, dele.value, srep.value
