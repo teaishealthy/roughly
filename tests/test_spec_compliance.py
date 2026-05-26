@@ -218,6 +218,19 @@ def test_server_drops_request_below_1024_bytes() -> None:
     short = b"\x00" * 512
     assert server.handle_batch(srv, (short,)) == [None]
 
+
+def test_server_accepts_requests_above_1024_bytes() -> None:
+    """§5.1 L493: same as above, but for valid requests that are ≥1024 bytes."""
+    srv = make_server()
+    raw = make_request()
+    msg = Packet.from_bytes(raw).message
+    zzzz_tag = get_tag(msg, tags.ZZZZ)
+    zzzz_tag.value = os.urandom(1024)
+    raw = Packet(message=msg).dump()
+    assert len(raw) >= 1024
+    assert server.handle_batch(srv, (raw,)) != [None]
+
+
 @pytest.mark.parametrize("to_drop", ["VER", "NONC", "TYPE"])
 def test_server_drops_request_missing_tag(to_drop: str) -> None:
     """§5.1 L484: server MUST ignore requests missing mandatory tags."""
