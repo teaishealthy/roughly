@@ -95,6 +95,9 @@ class ProtocolProfile:
     @staticmethod
     def from_version(version: int) -> ProtocolProfile:
         """Return the ProtocolProfile for a given Roughtime version."""
+        if version == 1:
+            version = LATEST_WIRE_VERSION
+
         if version == GOOGLE_ROUGHTIME_SENTINEL:
             return ProtocolProfile(
                 version=version,
