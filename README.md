@@ -166,7 +166,7 @@ The interopability matrix of `roughly` against Roughtime servers looks like this
 | [butterfield](https://github.com/signalsforgranted/butterfield) | ✅ |
 | [cloudflare](https://github.com/cloudflare/roughtime) | ✅ |
 | [pyroughtime](https://github.com/dansarie/pyroughtime) | ✅ |
-| [roughenough](https://github.com/int08h/roughenough/) | ❌ |
+| [roughenough](https://github.com/int08h/roughenough/) | ✅ |
 | [roughtimed](https://github.com/dansarie/roughtimed) | ✅ |
 | roughly | ✅ |
 | [tannerryan-roughtime](https://github.com/tannerryan/roughtime) | ✅ |
