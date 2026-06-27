@@ -166,19 +166,12 @@ The interopability matrix of `roughly` against Roughtime servers looks like this
 | [butterfield](https://github.com/signalsforgranted/butterfield) | ✅ |
 | [cloudflare](https://github.com/cloudflare/roughtime) | ✅ |
 | [pyroughtime](https://github.com/dansarie/pyroughtime) | ✅ |
-| [roughenough](https://github.com/int08h/roughenough/) | ⚠️ |
+| [roughenough](https://github.com/int08h/roughenough/) | ❌ |
 | [roughtimed](https://github.com/dansarie/roughtimed) | ✅ |
 | roughly | ✅ |
+| [tannerryan-roughtime](https://github.com/tannerryan/roughtime) | ✅ |
 
-⚠️ `roughenough` only expects version `0x8000000c` and does not ignore unknown versions.
-Make sure to explicitly request only version `0x8000000c` when querying `roughenough` servers, i.e.:
 
-```python
-await roughly.client.send_request(
-    # <snip!>
-    versions=(0x8000000c,),
-)
-```
 
 ### Roughly as a server
 
@@ -188,8 +181,9 @@ await roughly.client.send_request(
 | craggy | ✅ |
 | node-roughtime | ✅ |
 | pyroughtime | ✅ |
-| roughenough | ❌ |
+| roughenough | ✅ |
 | roughly | ✅ |
+| tannerryan-roughtime | ✅ |
 | vroughtime | ✅ |
 
 
