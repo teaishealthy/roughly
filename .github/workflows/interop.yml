@@ -1,0 +1,174 @@
+name: Interop (Plummet)
+
+on:
+    push:
+        branches:
+            - main
+    pull_request:
+        branches:
+            - main
+    workflow_dispatch:
+        inputs:
+            full_matrix:
+                description: "Run against all implementations instead of the fast subset"
+                type: boolean
+                default: false
+
+jobs:
+    interop:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout roughly
+              uses: actions/checkout@v4
+              with:
+                  path: roughly-src
+
+            - name: Checkout Plummet
+              uses: actions/checkout@v4
+              with:
+                  repository: ietf-wg-ntp/Roughtime-interop-code
+                  path: plummet
+
+            - name: Init pyroughtime submodule
+              if: ${{ inputs.full_matrix != true }}
+              run: git -C plummet submodule update --init -- implementations/pyroughtime/pyroughtime
+
+            - name: Init all submodules
+              if: ${{ inputs.full_matrix == true }}
+              run: git -C plummet submodule update --init --recursive
+
+            - name: Substitute current checkout into the roughly implementation
+              run: |
+                  mkdir -p plummet/implementations/roughly/roughly
+                  rsync -a --delete --exclude='.git' roughly-src/ plummet/implementations/roughly/roughly/
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.12"
+
+            - name: Install Poetry
+              uses: snok/install-poetry@v1
+
+            - name: Cache Poetry dependencies
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cache/pypoetry
+                      plummet/.venv
+                  key: poetry-${{ runner.os }}-${{ hashFiles('plummet/poetry.lock') }}
+                  restore-keys: |
+                      poetry-${{ runner.os }}-
+
+            - name: Install Plummet dependencies
+              working-directory: plummet
+              run: poetry install
+
+            - name: Trim implementations to the fast subset
+              if: ${{ inputs.full_matrix != true }}
+              working-directory: plummet
+              run: |
+                  poetry run python - <<'PY'
+                  import yaml
+
+                  path = "implementations/implementations.yml"
+                  with open(path) as f:
+                      data = yaml.safe_load(f)
+
+                  keep = {"roughly", "pyroughtime"}
+                  for name, impl in data["implementations"].items():
+                      impl["enabled"] = name in keep
+
+                  with open(path, "w") as f:
+                      yaml.safe_dump(data, f, sort_keys=False)
+                  PY
+
+            # buildx bake ignores the compose file's top-level `name: "plummet"` field
+            # (unlike `docker compose build`), so images must be tagged explicitly to
+            # match what Plummet's runtime compose file expects: plummet-<service>:latest.
+            - name: Build fast subset images
+              if: ${{ inputs.full_matrix != true }}
+              working-directory: plummet/implementations
+              run: |
+                  docker buildx bake -f docker-compose.yml \
+                      --set "*.cache-from=type=gha" \
+                      --set "*.cache-to=type=gha,mode=max" \
+                      --set "roughly.tags=plummet-roughly:latest" \
+                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
+                      --load \
+                      roughly pyroughtime
+
+            - name: Build all images
+              if: ${{ inputs.full_matrix == true }}
+              working-directory: plummet/implementations
+              run: |
+                  docker buildx bake -f docker-compose.yml \
+                      --set "*.cache-from=type=gha" \
+                      --set "*.cache-to=type=gha,mode=max" \
+                      --set "butterfield.tags=plummet-butterfield:latest" \
+                      --set "cloudflare.tags=plummet-cloudflare:latest" \
+                      --set "craggy.tags=plummet-craggy:latest" \
+                      --set "node-roughtime.tags=plummet-node-roughtime:latest" \
+                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
+                      --set "roughenough.tags=plummet-roughenough:latest" \
+                      --set "roughtimed.tags=plummet-roughtimed:latest" \
+                      --set "roughly.tags=plummet-roughly:latest" \
+                      --set "tannerryan-roughtime.tags=plummet-tannerryan-roughtime:latest" \
+                      --set "vroughtime.tags=plummet-vroughtime:latest" \
+                      --load
+
+            - name: Run Plummet
+              working-directory: plummet
+              run: poetry run plummet --container docker --workers 2 --timeout 15
+
+            - name: Summarize results
+              if: always()
+              working-directory: plummet
+              run: |
+                  poetry run python - <<'PY'
+                  import glob
+                  import json
+                  import os
+
+                  result_files = sorted(glob.glob("results/*/result.json"))
+                  if not result_files:
+                      print("No results/*/result.json found; Plummet may not have completed.")
+                      raise SystemExit(0)
+
+                  with open(result_files[-1]) as f:
+                      results = json.load(f)
+
+                  concerning = [
+                      r for r in results
+                      if (r["client"] == "roughly" or r["server"] == "roughly")
+                      and r["result"] in ("failure", "error")
+                  ]
+
+                  summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+                  lines = ["## Plummet interop results involving roughly", ""]
+                  if not concerning:
+                      lines.append("No failures or errors involving `roughly`. :white_check_mark:")
+                  else:
+                      lines.append("| Server | Client | Result |")
+                      lines.append("|---|---|---|")
+                      for r in concerning:
+                          lines.append(f"| {r['server']} | {r['client']} | {r['result']} |")
+
+                  text = "\n".join(lines) + "\n"
+                  print(text)
+                  if summary_path:
+                      with open(summary_path, "a") as f:
+                          f.write(text)
+                  PY
+
+            - name: Upload results artifact
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: plummet-results-${{ github.run_id }}
+                  path: plummet/results/
+                  if-no-files-found: ignore
