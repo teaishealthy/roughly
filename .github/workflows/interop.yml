@@ -87,6 +87,9 @@ jobs:
                       yaml.safe_dump(data, f, sort_keys=False)
                   PY
 
+            # buildx bake ignores the compose file's top-level `name: "plummet"` field
+            # (unlike `docker compose build`), so images must be tagged explicitly to
+            # match what Plummet's runtime compose file expects: plummet-<service>:latest.
             - name: Build fast subset images
               if: ${{ inputs.full_matrix != true }}
               working-directory: plummet/implementations
@@ -94,6 +97,8 @@ jobs:
                   docker buildx bake -f docker-compose.yml \
                       --set "*.cache-from=type=gha" \
                       --set "*.cache-to=type=gha,mode=max" \
+                      --set "roughly.tags=plummet-roughly:latest" \
+                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
                       --load \
                       roughly pyroughtime
 
@@ -104,6 +109,16 @@ jobs:
                   docker buildx bake -f docker-compose.yml \
                       --set "*.cache-from=type=gha" \
                       --set "*.cache-to=type=gha,mode=max" \
+                      --set "butterfield.tags=plummet-butterfield:latest" \
+                      --set "cloudflare.tags=plummet-cloudflare:latest" \
+                      --set "craggy.tags=plummet-craggy:latest" \
+                      --set "node-roughtime.tags=plummet-node-roughtime:latest" \
+                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
+                      --set "roughenough.tags=plummet-roughenough:latest" \
+                      --set "roughtimed.tags=plummet-roughtimed:latest" \
+                      --set "roughly.tags=plummet-roughly:latest" \
+                      --set "tannerryan-roughtime.tags=plummet-tannerryan-roughtime:latest" \
+                      --set "vroughtime.tags=plummet-vroughtime:latest" \
                       --load
 
             - name: Run Plummet
