@@ -1,5 +1,8 @@
 name: Interop (Plummet)
 
+permissions:
+    pull-requests: write
+
 on:
     push:
         branches:
@@ -45,6 +48,12 @@ jobs:
 
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
+
+            # `docker buildx bake` needs these to talk to the GitHub Actions cache
+            # backend (type=gha). docker/build-push-action sets them up internally;
+            # calling bake directly requires exposing them ourselves.
+            - name: Expose GitHub Actions runtime for buildx cache
+              uses: crazy-max/ghaction-github-runtime@v3
 
             - name: Set up Python
               uses: actions/setup-python@v5
@@ -163,7 +172,16 @@ jobs:
                   if summary_path:
                       with open(summary_path, "a") as f:
                           f.write(text)
+                  with open("pr_comment.md", "w") as f:
+                      f.write(text)
                   PY
+
+            - name: Comment on PR
+              if: ${{ github.event_name == 'pull_request' }}
+              uses: marocchino/sticky-pull-request-comment@v3
+              with:
+                  header: plummet-interop-results
+                  path: plummet/pr_comment.md
 
             - name: Upload results artifact
               if: always()
