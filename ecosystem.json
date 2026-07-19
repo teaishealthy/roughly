@@ -119,6 +119,18 @@
           "address": "rough.time.nl:2002"
         }
       ]
+    },
+    {
+      "name": "roughtime.sturdystatistics.com",
+      "version": "IETF-Roughtime",
+      "publicKeyType": "ed25519",
+      "publicKey": "NqIjwLopQn6yQChtE21Mb97dAbAPe5UOuTa0tOakgD8=",
+      "addresses": [
+        {
+          "protocol": "udp",
+          "address": "roughtime.sturdystatistics.com:2002"
+        }
+      ]
     }
   ]
 }
