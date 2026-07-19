@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import struct
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from roughly import tags
 from roughly.errors import FormatError, PacketError
@@ -45,6 +45,14 @@ class Tag:
 @dataclass
 class Message:
     tags: list[Tag]
+
+    def size(self) -> int:
+        # 4 bytes for the number of pairs,
+        # 4 bytes for each offset (N-1 offsets),
+        # and 4 bytes for each tag (N tags)
+        header_size = 4 + (len(self.tags) - 1) * 4 + len(self.tags) * 4
+        value_size = sum(len(tag.value) for tag in self.tags)
+        return header_size + value_size
 
     def debug_print(self) -> None:
         for tag in self.tags:
@@ -97,7 +105,7 @@ class Message:
         zzzz_tag = Tag(tag=tags.ZZZZ, value=b"")
         self.tags.append(zzzz_tag)
 
-        current_size = len(Packet(message=self).dump())
+        current_size = Packet.header_size + self.size()
 
         zlen = PACKET_SIZE - current_size
         zzzz_tag.value = b"\x00" * zlen
@@ -149,6 +157,8 @@ _DEFAULT_PROFILE = ProtocolProfile.from_version(max(VERSIONS_SUPPORTED))
 class Packet:
     message: Message
     magic: int = ROUGHTIM
+
+    header_size: Literal[12] = 12
 
     def dump(self, *, profile: ProtocolProfile = _DEFAULT_PROFILE) -> bytes:
         message_data = self.message.to_bytes()
