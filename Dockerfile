@@ -32,4 +32,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 2002
 
-CMD ["/app/.venv/bin/python", "-m", "roughly.cli", "-v", "server", "run", "--host", "0.0.0.0", "--port", "2002"]
+CMD ["/app/.venv/bin/python", "-m", "roughly.cli", "-v", "server", "run"]

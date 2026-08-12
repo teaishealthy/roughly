@@ -64,12 +64,15 @@ This will output a .env file containing the server's private key.
 You can then run the server like so:
 
 ```bash
-ROUGHLY_SERVER_PRIVATE_KEY="your_private_key_here" roughly -v server run
+ROUGHLY_PRIVATE_KEY="your_private_key_here" roughly -v server run
 ```
 
 By default, the server will bind to `0.0.0.0:2002`. You can change this using the `--host` and `--port` flags.
 I recommend running the server with verbose logging enabled (`-v`), so you can see incoming requests and debug any issues.
 Additionally you might want to consider turning off response greasing while testing using the `--no-grease` flag.
+
+Every `server run` option can also be set through an environment variable, named after
+the flag with a `ROUGHLY_` prefix. Check `roughly server run --help` for more information.
 
 ### As a library
 

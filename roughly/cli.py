@@ -243,32 +243,55 @@ def server() -> None:
 
 
 @server.command(name="run")
-@click.option("--host", default="0.0.0.0", help="Host to bind to")  # noqa: S104
-@click.option("--port", "-p", default=2002, type=int, help="Port to bind to")
+@click.option(
+    "--host",
+    default="0.0.0.0",  # noqa: S104
+    help="Host to bind to",
+    envvar="ROUGHLY_HOST",
+    show_default=True,
+    show_envvar=True,
+)
+@click.option(
+    "--port",
+    "-p",
+    default=2002,
+    type=int,
+    help="Port to bind to",
+    envvar="ROUGHLY_PORT",
+    show_default=True,
+    show_envvar=True,
+)
 @click.option(
     "--private-key",
     type=str,
     help="Base64-encoded 32-byte Ed25519 private key. If not provided, generates a new key.",
     envvar="ROUGHLY_PRIVATE_KEY",
+    show_envvar=True,
 )
 @click.option(
     "--radius",
-    default=3,
+    default=roughly.server.DEFAULT_RADIUS,
     type=int,
     help="Uncertainty radius in seconds",
+    envvar="ROUGHLY_RADIUS",
+    show_default=True,
+    show_envvar=True,
 )
 @click.option(
     "--validity-seconds",
     default=None,
     type=int,
     help="Validity period for the delegated key in seconds. "
-    "If not set, defaults to 3600 seconds (1 hour).",
+    f"If not set, defaults to {roughly.server.CERT_VALIDITY} seconds.",
+    envvar="ROUGHLY_VALIDITY_SECONDS",
+    show_envvar=True,
 )
 @click.option(
     "--no-grease",
     is_flag=True,
     help="Disable response greasing",
     envvar="ROUGHLY_NO_GREASE",
+    show_envvar=True,
 )
 @click.option(
     "--grease-probability",
@@ -278,6 +301,7 @@ def server() -> None:
     f"If not set, defaults to {roughly.server.GREASE_PROBABILITY} "
     f"({roughly.server.GREASE_PROBABILITY * 100:.2f}%).",
     envvar="ROUGHLY_GREASE_PROBABILITY",
+    show_envvar=True,
 )
 def server_run(
     host: str,

@@ -52,7 +52,7 @@ random = SystemRandom()
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_RADIUS = int(os.environ.get("ROUGHLY_DEFAULT_RADIUS", "3"))
+DEFAULT_RADIUS = 3
 CLIENT_VERSIONS_SUPPORTED = build_supported_versions(10, 15)
 
 CERT_VALIDITY = 60 * 60  # 1 hour
