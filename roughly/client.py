@@ -21,18 +21,21 @@ from roughly.models import (
 )
 from roughly.shared import (
     GOOGLE_ROUGHTIME_SENTINEL,
+    LAST_TOP_LEVEL_VER_VERSION,
     RESPONSE_CONTEXT_STRING,
     VERSIONS_SUPPORTED,
     ProtocolProfile,
     find_by_tag,
+    format_versions,
+    get_by_tag,
+    is_draft_version,
     partial_sha512,
-    pop_by_tag,
     unpack_uint32,
     unpack_uint32_list,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
 
 T = TypeVar("T")
@@ -160,6 +163,77 @@ def build_request(
     return Packet(message=message)
 
 
+def offered_versions(packet: Packet) -> tuple[int, ...]:
+    """The version space the client offered in its request."""
+    if not packet.framed:
+        return (GOOGLE_ROUGHTIME_SENTINEL,)
+
+    ver = find_by_tag(packet.message.tags, tags.VER)
+    if ver is None:
+        raise PacketError("No VER tag found in request packet")
+    return unpack_uint32_list(ver.value, what="VER")
+
+
+def _signed_version(message: Message) -> int | None:
+    """The version from SREP, which is covered by the response signature."""
+    srep = find_by_tag(message.tags, tags.SREP)
+    if srep is None:
+        raise PacketError("No SREP tag found in response packet")
+
+    ver = find_by_tag(Message.from_bytes(srep.value).tags, tags.VER)
+    if ver is None:
+        return None
+    return unpack_uint32(ver.value, what="SREP VER")
+
+
+def resolve_response_version(packet: Packet, *, offered: Sequence[int]) -> int:
+    """Determine the version of a response, from the packet structure outwards.
+
+    The version is taken from the signed SREP VER where present, and only otherwise from the
+    unsigned top-level VER, which bounds the version to what could have put it there. The
+    result must be one of the versions the client offered.
+    """
+    if not packet.framed:
+        version = GOOGLE_ROUGHTIME_SENTINEL
+    else:
+        signed_version = _signed_version(packet.message)
+
+        top_level = find_by_tag(packet.message.tags, tags.VER)
+        top_level_version = (
+            unpack_uint32(top_level.value, what="VER") if top_level is not None else None
+        )
+
+        if signed_version is not None:
+            if top_level_version is not None and top_level_version != signed_version:
+                raise PacketError(
+                    f"Top-level VER {top_level_version:#x} contradicts "
+                    f"the signed SREP VER {signed_version:#x}"
+                )
+            version = signed_version
+        elif top_level_version is not None:
+            # VER moved into SREP in draft-12, so anything that puts it at the top level
+            # of a response is draft-11 or older.
+            if (
+                not is_draft_version(top_level_version)
+                or top_level_version > LAST_TOP_LEVEL_VER_VERSION
+            ):
+                raise PacketError(
+                    f"Version {top_level_version:#x} must not be signalled by a top-level VER"
+                )
+            version = top_level_version
+        else:
+            raise PacketError("Response declares no version")
+
+    if version not in offered:
+        if version == GOOGLE_ROUGHTIME_SENTINEL:
+            raise PacketError("Response is unframed (Google Roughtime), which was not offered")
+        raise PacketError(
+            f"Response version {version:#x} not in request VER list: {format_versions(offered)}"
+        )
+
+    return version
+
+
 @dataclass
 class VerifiableResponse(Response):
     """Client-side response with verification context."""
@@ -181,29 +255,22 @@ class VerifiableResponse(Response):
 
     _profile: ProtocolProfile
 
+    _version: int
+
     @property
     def version(self) -> int:
-        """The version of the response."""
-        if not self.signed_response.version:
-            result = find_by_tag(self.packet.message.tags, tags.VER)
-            if result is None:
-                raise PacketError("No VER tag found in response packet")
-            return unpack_uint32(result.value[:4], what="VER")
-
-        return self.signed_response.version
+        """The version of the response, as declared on the wire."""
+        return self._version
 
     @classmethod
     def from_packet(cls, *, raw: bytes, request: bytes) -> VerifiableResponse:
         p = Packet.from_bytes(raw)
+        request_packet = Packet.from_bytes(request)
 
-        ver_result = find_by_tag(p.message.tags, tags.VER)
-        if ver_result is not None:
-            wire_ver = unpack_uint32(ver_result.value, what="VER")
-        else:
-            wire_ver = GOOGLE_ROUGHTIME_SENTINEL
-        wire_profile = ProtocolProfile.from_version(wire_ver)
+        version = resolve_response_version(p, offered=offered_versions(request_packet))
+        profile = ProtocolProfile.from_version(version)
 
-        response, dele_raw, srep_raw = Response.from_message(p.message, profile=wire_profile)
+        response, dele_raw, srep_raw = Response.from_message(p.message, profile=profile)
 
         verifiable = cls(
             signature=response.signature,
@@ -218,23 +285,14 @@ class VerifiableResponse(Response):
             packet=p,
             dele_raw=dele_raw,
             srep_raw=srep_raw,
-            _profile=wire_profile,
+            _profile=profile,
+            _version=version,
         )
-        verifiable._profile = ProtocolProfile.from_version(verifiable.version)
 
-        if wire_profile.type_tag_required and response.type is None:
+        if profile.type_tag_required and response.type is None:
             raise PacketError("TYPE tag missing in response")
 
-        request_message = Packet.from_bytes(request).message
-        vers = pop_by_tag(request_message.tags, tags.VER)
-        versions = unpack_uint32_list(vers.value, what="VER")
-        if verifiable.version not in versions:
-            raise PacketError(
-                f"Response version {verifiable.version:#x} not in request VER list: "
-                + ", ".join(f"{v:#x}" for v in versions)
-            )
-
-        nonc = pop_by_tag(request_message.tags, tags.NONC)
+        nonc = get_by_tag(request_packet.message.tags, tags.NONC)
         if verifiable.nonce != nonc.value:
             raise PacketError("Response NONC does not match request NONC")
 

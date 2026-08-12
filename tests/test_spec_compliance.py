@@ -21,6 +21,7 @@ from roughly.shared import (
 
 DRAFT_15 = DRAFT_VERSION_ZERO | 15
 DRAFT_14 = DRAFT_VERSION_ZERO | 14
+DRAFT_13 = DRAFT_VERSION_ZERO | 13
 DRAFT_11 = DRAFT_VERSION_ZERO | 11
 PROFILE_15 = ProtocolProfile.from_version(DRAFT_15)
 
@@ -592,6 +593,121 @@ def test_from_packet_rejects_unrequested_response_version() -> None:
 
     with pytest.raises(PacketError):
         client.VerifiableResponse.from_packet(raw=response, request=bogus_request)
+
+
+# Version determination (#9)
+
+
+def set_srep_version(message: Message, version: int | None) -> None:
+    """Rewrite (or drop) the VER tag inside SREP. Invalidates the SREP signature."""
+    srep = get_tag(message, tags.SREP)
+    srep_message = Message.from_bytes(srep.value)
+    srep_message.tags = [t for t in srep_message.tags if t.tag != tags.VER]
+    if version is not None:
+        srep_message.tags.append(Tag(tag=tags.VER, value=struct.pack("<I", version)))
+    srep_message.tags.sort(key=lambda t: t.tag)
+    srep.value = srep_message.to_bytes()
+
+
+def set_top_level_version(message: Message, value: bytes | None) -> None:
+    message.tags = [t for t in message.tags if t.tag != tags.VER]
+    if value is not None:
+        message.tags.append(Tag(tag=tags.VER, value=value))
+
+
+def test_signed_srep_version_is_the_authority() -> None:
+    """A draft-12+ response carries its version in SREP, where it is signed."""
+    srv = make_server()
+    raw = make_request(versions=(DRAFT_15,))
+    resp = client.VerifiableResponse.from_packet(raw=roundtrip(srv, raw), request=raw)
+    assert resp.version == DRAFT_15
+
+
+def test_from_packet_rejects_top_level_ver_contradicting_srep() -> None:
+    """The unsigned top-level VER must not disagree with the signed SREP VER."""
+    srv = make_server()
+    raw = make_request(versions=(DRAFT_11,))
+    packet = Packet.from_bytes(roundtrip(srv, raw))
+    # draft-11 responses carry VER in both places; only the signed one is trustworthy.
+    set_top_level_version(packet.message, struct.pack("<I", DRAFT_14))
+
+    with pytest.raises(PacketError):
+        client.VerifiableResponse.from_packet(raw=remake_packet(packet.message), request=raw)
+
+
+def test_from_packet_falls_back_to_top_level_ver() -> None:
+    """Pre-draft-12 responses signal their version at the top level only."""
+    srv = make_server()
+    raw = make_request(versions=(DRAFT_11,))
+    packet = Packet.from_bytes(roundtrip(srv, raw))
+    set_srep_version(packet.message, None)
+
+    resp = client.VerifiableResponse.from_packet(raw=remake_packet(packet.message), request=raw)
+    assert resp.version == DRAFT_11
+
+
+@pytest.mark.parametrize("version", [DRAFT_13, 1])
+def test_from_packet_rejects_top_level_ver_above_draft_11(version: int) -> None:
+    """draft-12 moved VER into SREP, so a top-level VER cannot signal draft-12 or later."""
+    srv = make_server()
+    raw = make_request(versions=(1, DRAFT_13))
+    packet = Packet.from_bytes(roundtrip(srv, raw))
+    set_srep_version(packet.message, None)
+    set_top_level_version(packet.message, struct.pack("<I", version))
+
+    with pytest.raises(PacketError):
+        client.VerifiableResponse.from_packet(raw=remake_packet(packet.message), request=raw)
+
+
+def test_from_packet_rejects_response_without_any_version() -> None:
+    """A framed response that declares no version at all is not usable."""
+    srv = make_server()
+    raw = make_request(versions=(DRAFT_15,))
+    packet = Packet.from_bytes(roundtrip(srv, raw))
+    set_srep_version(packet.message, None)
+    set_top_level_version(packet.message, None)
+
+    with pytest.raises(PacketError):
+        client.VerifiableResponse.from_packet(raw=remake_packet(packet.message), request=raw)
+
+
+def test_from_packet_rejects_multi_entry_top_level_ver() -> None:
+    """In a response VER holds a single version, never a list."""
+    srv = make_server()
+    raw = make_request(versions=(DRAFT_11,))
+    packet = Packet.from_bytes(roundtrip(srv, raw))
+    set_srep_version(packet.message, None)
+    set_top_level_version(packet.message, struct.pack("<II", DRAFT_11, DRAFT_14))
+
+    with pytest.raises(PacketError):
+        client.VerifiableResponse.from_packet(raw=remake_packet(packet.message), request=raw)
+
+
+def test_from_packet_rejects_unframed_response() -> None:
+    """An unframed response is Google Roughtime, which a framed request never offered."""
+    srv = make_server()
+    raw = make_request(versions=(DRAFT_15,))
+    response = roundtrip(srv, raw)
+
+    unframed = response[Packet.header_size :]
+    assert Packet.from_bytes(unframed).framed is False
+
+    with pytest.raises(PacketError, match="Google Roughtime"):
+        client.VerifiableResponse.from_packet(raw=unframed, request=raw)
+
+
+def test_server_drops_framed_request_without_ver() -> None:
+    """A missing VER means Google Roughtime only when the packet is unframed."""
+    srv = make_server()
+    message = Message(
+        tags=[
+            Tag(tag=tags.NONC, value=os.urandom(32)),
+            Tag(tag=tags.TYPE, value=struct.pack("<I", tags.TYPE_REQUEST)),
+        ]
+    )
+    message.prepare()
+
+    assert server.handle_batch(srv, (Packet(message=message).dump(),)) == [None]
 
 
 # §5.3 Merkle Tree

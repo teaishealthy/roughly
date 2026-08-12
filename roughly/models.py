@@ -185,6 +185,8 @@ class Packet:
 
     header_size: Literal[12] = 12
 
+    framed: bool = True
+
     def dump(self, *, profile: ProtocolProfile = _DEFAULT_PROFILE) -> bytes:
         message_data = self.message.to_bytes()
         data = b""
@@ -205,7 +207,7 @@ class Packet:
         if magic != cls.magic:
             # we might be interacting with Google Roughtime
             with contextlib.suppress(PacketError):
-                return cls(message=Message.from_bytes(data))
+                return cls(message=Message.from_bytes(data), framed=False)
 
             raise PacketError(f"Expected magic {cls.magic:#x}, got {magic:#x}")
 

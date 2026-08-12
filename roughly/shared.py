@@ -33,6 +33,10 @@ DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
 DRAFT_VERSION_ZERO = 0x80000000
 LATEST_WIRE_VERSION = DRAFT_VERSION_ZERO | 12
 
+# draft-12 moved VER into SREP, so a top-level VER in a response
+# can only have come from draft-11 or earlier.
+LAST_TOP_LEVEL_VER_VERSION = DRAFT_VERSION_ZERO | 11
+
 # The actual value is not important, we just need a unique sentinel
 # that doesn't make sense semantically
 GOOGLE_ROUGHTIME_SENTINEL = int.from_bytes(b"Google Roughtime")
@@ -43,6 +47,10 @@ T = TypeVar("T")
 
 def format_versions(versions: Iterable[int]) -> str:
     return ", ".join(f"{v:#x}" for v in versions)
+
+
+def is_draft_version(version: int) -> bool:
+    return version & DRAFT_VERSION_ZERO == DRAFT_VERSION_ZERO
 
 
 def partial_sha512(data: bytes) -> bytes:

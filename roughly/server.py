@@ -292,11 +292,13 @@ class Request(NamedTuple):
         packet = Packet.from_bytes(data)
         msg_tags = packet.message.tags
 
-        ver = find_by_tag(msg_tags, tags.VER)
-        if ver:
-            versions = unpack_uint32_list(ver.value, what="VER")
-        else:
+        if not packet.framed:
             versions = (GOOGLE_ROUGHTIME_SENTINEL,)
+        else:
+            ver = find_by_tag(msg_tags, tags.VER)
+            if ver is None:
+                raise PacketError("No VER tag found in request packet")
+            versions = unpack_uint32_list(ver.value, what="VER")
 
         nonc = get_by_tag(msg_tags, tags.NONC)
 
