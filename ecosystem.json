@@ -122,7 +122,7 @@
     },
     {
       "name": "roughtime.sturdystatistics.com",
-      "version": "IETF-Roughtime",
+      "version": "1",
       "publicKeyType": "ed25519",
       "publicKey": "NqIjwLopQn6yQChtE21Mb97dAbAPe5UOuTa0tOakgD8=",
       "addresses": [
