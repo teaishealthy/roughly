@@ -139,7 +139,7 @@ def grease_message(server: Server, profile: ProtocolProfile, message: Message) -
         snapshot = copy.deepcopy(message)
         try:
             greaser(server, profile, message)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Greaser %s failed, reverting", greaser.__name__, exc_info=True)
             message = snapshot
             continue
@@ -175,7 +175,7 @@ def srv_hash(key: ed25519.Ed25519PrivateKey) -> bytes:
     return partial_sha512(b"\xff" + public_key_bytes(key))
 
 
-def create_certificate(  # noqa: PLR0913
+def create_certificate(
     long_term_key: ed25519.Ed25519PrivateKey,
     delegated_key: ed25519.Ed25519PrivateKey,
     min_time: int,
@@ -216,7 +216,7 @@ class Server(NamedTuple):
         return int(time.time())
 
     @classmethod
-    def create(  # noqa: PLR0913
+    def create(
         cls,
         private_key: bytes | None = None,
         *,
@@ -377,7 +377,7 @@ def get_merkle_path(levels: list[list[bytes]], index: int) -> list[bytes]:
     return path
 
 
-def build_response(  # noqa: PLR0913
+def build_response(
     server: Server,
     *,
     nonce: bytes,
@@ -409,7 +409,7 @@ def pick_cert(*, certificates: CertificateStore, profile: ProtocolProfile) -> Ce
     return certificates.certs[profile.delegation_context]
 
 
-def make_response(  # noqa: PLR0913
+def make_response(
     server: Server,
     nonce: bytes,
     profile: ProtocolProfile,

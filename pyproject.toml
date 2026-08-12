@@ -83,6 +83,11 @@ ignore = [
     "EM102", # use of f-string literals in exceptions
 
     "SLF001", # private member access
+
+    "CPY001", # missing copyright notice at top of file
+
+    "PLR0913", # too many arguments
+    "PLR0917", # too many positional arguments
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -107,5 +112,5 @@ log_cli = true
 log_cli_level = "DEBUG"
 
 [build-system]
-requires = ["uv_build>=0.9.27,<0.12.0"]
+requires = ["uv_build>=0.12.3,<0.13"]
 build-backend = "uv_build"

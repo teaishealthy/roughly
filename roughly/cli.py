@@ -14,7 +14,7 @@ import roughly.ecosystem
 import roughly.errors
 import roughly.server
 
-# ruff: noqa: FBT001 FBT002 PLR0913
+# ruff: noqa: FBT001, FBT002
 
 REASON_EXPLANATIONS: dict[roughly.errors.RoughtimeErrorReason, str] = {
     "key-age": "The delegated signing key isn't valid at the current time.",
