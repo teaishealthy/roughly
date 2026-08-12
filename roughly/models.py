@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import struct
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import TYPE_CHECKING, Literal
 
 from roughly import tags
@@ -11,14 +12,17 @@ from roughly.shared import (
     GOOGLE_ROUGHTIME_SENTINEL,
     PACKET_SIZE,
     ROUGHTIM,
+    UINT32_SIZE,
     VERSIONS_SUPPORTED,
     ProtocolProfile,
-    always,
     convert_mjd_to_unix,
     find_by_tag,
     get_by_tag,
     microseconds_to_seconds,
     split_into_chunks,
+    unpack_uint32,
+    unpack_uint32_list,
+    unpack_uint64,
 )
 
 if TYPE_CHECKING:
@@ -40,6 +44,20 @@ __all__ = (
 class Tag:
     tag: int  # uint32
     value: bytes
+
+
+def _validate_offsets(raw_offsets: tuple[int, ...], values_len: int) -> list[int]:
+    offsets = [0, *raw_offsets]
+    for previous, offset in pairwise(offsets):
+        if offset % UINT32_SIZE != 0:
+            raise PacketError(f"Tag value offset {offset} is not a multiple of {UINT32_SIZE}")
+        if offset < previous:
+            raise PacketError("Tag value offsets must be non-decreasing")
+        if offset > values_len:
+            raise PacketError(
+                f"Tag value offset {offset} lies past the {values_len}-byte tag value section"
+            )
+    return offsets
 
 
 @dataclass
@@ -112,26 +130,34 @@ class Message:
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Message:
+        if len(data) < UINT32_SIZE:
+            raise PacketError(f"Message is too short to hold a tag count (len={len(data)})")
+
         (num_pairs,) = struct.unpack_from("<I", data, 0)
         if num_pairs == 0:
             raise PacketError("Message contains zero tag-value pairs")
 
         offsets_count = num_pairs - 1
-        offsets_end = 4 + offsets_count * 4
-        tags_end = offsets_end + num_pairs * 4
+        offsets_end = UINT32_SIZE + offsets_count * UINT32_SIZE
+        tags_end = offsets_end + num_pairs * UINT32_SIZE
+
+        if tags_end > len(data):
+            raise PacketError(
+                f"Message declares {num_pairs} tag-value pairs but is only {len(data)} bytes long"
+            )
 
         raw_offsets: tuple[int, ...] = (
-            struct.unpack_from(f"<{offsets_count}I", data, 4) if offsets_count else ()
+            struct.unpack_from(f"<{offsets_count}I", data, UINT32_SIZE) if offsets_count else ()
         )
         raw_tags: tuple[int, ...] = struct.unpack_from(f"<{num_pairs}I", data, offsets_end)
 
-        offsets = [0, *raw_offsets]
-        for i in range(offsets_count):
-            offset = offsets[i + 1]
-            if offset % 4 != 0:
-                raise PacketError(f"Tag value offset {offset} is not a multiple of 4")
-            if offset < offsets[i]:
-                raise PacketError("Tag value offsets must be non-decreasing")
+        values_data = data[tags_end:]
+        if len(values_data) % UINT32_SIZE != 0:
+            raise PacketError(
+                f"Tag values are not {UINT32_SIZE}-byte aligned (len={len(values_data)})"
+            )
+
+        offsets = _validate_offsets(raw_offsets, len(values_data))
 
         for i in range(1, num_pairs):
             if raw_tags[i] <= raw_tags[i - 1]:
@@ -140,7 +166,6 @@ class Message:
                     f"{raw_tags[i]:#x} follows {raw_tags[i - 1]:#x}"
                 )
 
-        values_data = data[tags_end:]
         tag_list: list[Tag] = []
         for i in range(num_pairs):
             start = offsets[i]
@@ -173,7 +198,10 @@ class Packet:
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Packet:
-        magic, msg_len = struct.unpack("<QI", data[:12])
+        if len(data) < cls.header_size:
+            raise PacketError(f"Packet is too short to be a Roughtime packet (len={len(data)})")
+
+        magic, msg_len = struct.unpack("<QI", data[: cls.header_size])
         if magic != cls.magic:
             # we might be interacting with Google Roughtime
             with contextlib.suppress(PacketError):
@@ -207,19 +235,15 @@ class SignedResponse:
         versions_tag = find_by_tag(message.tags, tags.VERS)
         version_tag = find_by_tag(message.tags, tags.VER)
         root_tag = get_by_tag(message.tags, tags.ROOT)
-        (radius,) = struct.unpack("<I", radius_tag.value)
-        (midpoint,) = struct.unpack("<Q", midpoint_tag.value)
+        radius = unpack_uint32(radius_tag.value, what="RADI")
+        midpoint = unpack_uint64(midpoint_tag.value, what="MIDP")
 
         if profile.use_mjd:
             midpoint = convert_mjd_to_unix(midpoint)
             radius = max(1, microseconds_to_seconds(radius))
 
-        versions = (
-            struct.unpack(f"<{len(versions_tag.value) // 4}I", versions_tag.value)
-            if versions_tag
-            else ()
-        )
-        version = struct.unpack("<I", version_tag.value)[0] if version_tag else 0
+        versions = unpack_uint32_list(versions_tag.value, what="VERS") if versions_tag else ()
+        version = unpack_uint32(version_tag.value, what="VER") if version_tag else 0
         root = root_tag.value
 
         return cls(
@@ -265,8 +289,8 @@ class Delegation:
         maxt_tag = get_by_tag(dele_message.tags, tags.MAXT)
 
         public_key = pubk_tag.value
-        (min_time,) = struct.unpack("<Q", mint_tag.value)
-        (max_time,) = struct.unpack("<Q", maxt_tag.value)
+        min_time = unpack_uint64(mint_tag.value, what="MINT")
+        max_time = unpack_uint64(maxt_tag.value, what="MAXT")
 
         if profile.use_mjd:
             min_time = convert_mjd_to_unix(min_time)
@@ -396,7 +420,7 @@ class Response:
         type_tag = find_by_tag(message.tags, tags.TYPE)
         type = None
         if type_tag is not None:
-            (type,) = struct.unpack("<I", type_tag.value)
+            type = unpack_uint32(type_tag.value, what="TYPE")
 
             if type != tags.TYPE_RESPONSE:
                 raise PacketError(f"Expected TYPE_RESPONSE, got {type}")
@@ -408,7 +432,9 @@ class Response:
 
         # Extract raw DELE bytes from CERT for signature verification
         cert_msg = Message.from_bytes(cert.value)
-        dele = always(find_by_tag(cert_msg.tags, tags.DELE))
+        # get_by_tag, not always(): a CERT without DELE is malformed input,
+        # not a broken invariant.
+        dele = get_by_tag(cert_msg.tags, tags.DELE)
 
         response = cls(
             signature=sig.value,
@@ -417,7 +443,7 @@ class Response:
             path=split_into_chunks(path.value, 32),
             signed_response=SignedResponse.from_bytes(srep.value, profile=profile),
             certificate=Certificate.from_bytes(cert.value, profile=profile),
-            index=struct.unpack("<I", indx.value)[0],
+            index=unpack_uint32(indx.value, what="INDX"),
         )
 
         return response, dele.value, srep.value

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import functools
+import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from cryptography.hazmat.primitives import hashes
 
-from roughly.errors import RoughtimeError
+from roughly.errors import PacketError, RoughtimeError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, MutableSequence
@@ -19,6 +20,9 @@ SECONDS_IN_A_DAY = 86400
 
 
 PACKET_SIZE = 1024
+
+UINT32_SIZE = 4
+UINT64_SIZE = 8
 
 
 ROUGHTIM = 0x4D49544847554F52
@@ -171,6 +175,24 @@ def build_supported_versions(start: int, end: int) -> tuple[int, ...]:
 
 
 VERSIONS_SUPPORTED = (1, *build_supported_versions(7, 15))
+
+
+def unpack_uint32(data: bytes, *, what: str) -> int:
+    if len(data) != UINT32_SIZE:
+        raise PacketError(f"{what} must be {UINT32_SIZE} bytes, got {len(data)}")
+    return int(struct.unpack("<I", data)[0])
+
+
+def unpack_uint64(data: bytes, *, what: str) -> int:
+    if len(data) != UINT64_SIZE:
+        raise PacketError(f"{what} must be {UINT64_SIZE} bytes, got {len(data)}")
+    return int(struct.unpack("<Q", data)[0])
+
+
+def unpack_uint32_list(data: bytes, *, what: str) -> tuple[int, ...]:
+    if len(data) % UINT32_SIZE != 0:
+        raise PacketError(f"{what} length {len(data)} is not a multiple of {UINT32_SIZE}")
+    return struct.unpack(f"<{len(data) // UINT32_SIZE}I", data)
 
 
 def split_into_chunks(data: bytes, chunk_size: int) -> list[bytes]:

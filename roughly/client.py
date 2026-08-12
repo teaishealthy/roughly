@@ -27,6 +27,8 @@ from roughly.shared import (
     find_by_tag,
     partial_sha512,
     pop_by_tag,
+    unpack_uint32,
+    unpack_uint32_list,
 )
 
 if TYPE_CHECKING:
@@ -186,8 +188,7 @@ class VerifiableResponse(Response):
             result = find_by_tag(self.packet.message.tags, tags.VER)
             if result is None:
                 raise PacketError("No VER tag found in response packet")
-            (version,) = struct.unpack("<I", result.value[:4])
-            return version
+            return unpack_uint32(result.value[:4], what="VER")
 
         return self.signed_response.version
 
@@ -197,7 +198,7 @@ class VerifiableResponse(Response):
 
         ver_result = find_by_tag(p.message.tags, tags.VER)
         if ver_result is not None:
-            (wire_ver,) = struct.unpack("<I", ver_result.value)
+            wire_ver = unpack_uint32(ver_result.value, what="VER")
         else:
             wire_ver = GOOGLE_ROUGHTIME_SENTINEL
         wire_profile = ProtocolProfile.from_version(wire_ver)
@@ -226,7 +227,7 @@ class VerifiableResponse(Response):
 
         request_message = Packet.from_bytes(request).message
         vers = pop_by_tag(request_message.tags, tags.VER)
-        versions = struct.unpack(f"<{len(vers.value) // 4}I", vers.value)
+        versions = unpack_uint32_list(vers.value, what="VER")
         if verifiable.version not in versions:
             raise PacketError(
                 f"Response version {verifiable.version:#x} not in request VER list: "

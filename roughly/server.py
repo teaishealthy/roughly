@@ -5,7 +5,6 @@ import copy
 import logging
 import os
 import string
-import struct
 import time
 from collections import defaultdict
 from itertools import pairwise
@@ -44,6 +43,8 @@ from roughly.shared import (
     get_by_tag,
     partial_sha512,
     pop_by_tag,
+    unpack_uint32,
+    unpack_uint32_list,
 )
 
 random = SystemRandom()
@@ -293,14 +294,14 @@ class Request(NamedTuple):
 
         ver = find_by_tag(msg_tags, tags.VER)
         if ver:
-            versions = struct.unpack(f"<{len(ver.value) // 4}I", ver.value)
+            versions = unpack_uint32_list(ver.value, what="VER")
         else:
             versions = (GOOGLE_ROUGHTIME_SENTINEL,)
 
         nonc = get_by_tag(msg_tags, tags.NONC)
 
         typ = find_by_tag(msg_tags, tags.TYPE)
-        type = struct.unpack("<I", typ.value)[0] if typ else None
+        type = unpack_uint32(typ.value, what="TYPE") if typ else None
 
         srv = find_by_tag(msg_tags, tags.SRV)
         # always an optional tag
@@ -431,8 +432,6 @@ def make_response(  # noqa: PLR0913
     )
 
     return response.to_message(profile=profile)
-
-
 
 
 def handle_batch(server: Server, requests: Sequence[bytes]) -> list[bytes | None]:
@@ -589,7 +588,11 @@ async def _batch_processor(handler: UDPHandler) -> None:
 
         raw_list = [data for data, _ in batch]
         addrs = [addr for _, addr in batch]
-        responses = handle_batch(handler.server, raw_list)
+        try:
+            responses = handle_batch(handler.server, raw_list)
+        except Exception:
+            logger.exception("Batch processing failed, dropping %d request(s)", len(raw_list))
+            continue
 
         if handler.transport:
             for resp, addr in zip(responses, addrs, strict=True):
