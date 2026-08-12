@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-dependencies = ["cryptography>=46.0.3"]
+dependencies = ["cryptography>=50.0.0"]
 keywords = ["roughtime", "time", "ntp", "synchronization", "asyncio"]
 classifiers = [
     "Programming Language :: Python :: 3.12",
