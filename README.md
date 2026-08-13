@@ -4,7 +4,6 @@
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/teaishealthy/roughly/tests.yml?style=flat-square&label=tests)
 ![Coveralls](https://img.shields.io/coverallsCoverage/github/teaishealthy/roughly?style=flat-square)
 [![Roughtime draft 07-19](https://img.shields.io/badge/draft%2007--19-f2d3ff?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19)
-![WIP](https://img.shields.io/badge/WIP-ffb1b1?style=flat-square)
 
 An asynchronous implemenation of the Roughtime protocol for Python.
 
