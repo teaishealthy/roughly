@@ -1,15 +1,16 @@
-FROM ghcr.io/astral-sh/uv:bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:trixie-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 ENV UV_PYTHON_INSTALL_DIR=/python
 
 ENV UV_PYTHON_PREFERENCE=only-managed
 
-RUN uv python install 3.12
+ENV UV_PYTHON=3.13
+
+RUN uv python install 3.13
 
 WORKDIR /app
 
-# Install dependencies first (for caching)
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
@@ -20,16 +21,17 @@ COPY roughly/ ./roughly/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra cli
 
-FROM gcr.io/distroless/cc-debian12
+RUN mv /app/.venv/lib/python3.13/site-packages /app/deps
 
-COPY --from=builder /python /python
-COPY --from=builder /app/.venv /app/.venv
+FROM gcr.io/distroless/python3-debian13
+
+COPY --from=builder /app/deps /app/deps
 
 WORKDIR /app
 
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH=/app/deps
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 2002
+EXPOSE 2002/udp
 
-CMD ["/app/.venv/bin/python", "-m", "roughly.cli", "-v", "server", "run"]
+CMD ["-m", "roughly.cli", "-v", "server", "run"]
