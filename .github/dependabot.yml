@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: "monthly"
 
-groups:
-  all-dependencies:
-    patterns:
-      - "*"
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"
