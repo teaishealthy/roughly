@@ -30,7 +30,7 @@ jobs:
             - name: Checkout Plummet
               uses: actions/checkout@v4
               with:
-                  repository: ietf-wg-ntp/Roughtime-interop-code
+                  repository: teaishealthy/plummet
                   path: plummet
 
             - name: Init pyroughtime submodule
@@ -132,7 +132,7 @@ jobs:
 
             - name: Run Plummet
               working-directory: plummet
-              run: poetry run plummet --container docker --workers 2 --timeout 15
+              run: poetry run plummet --container docker --workers 4 --timeout 15 --focus roughly
 
             - name: Summarize results
               if: always()
