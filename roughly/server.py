@@ -513,21 +513,28 @@ def _process_group(
     requests_only = [req for _, req, _ in group]
     root, levels = build_merkle_tree(profile, requests_only)
 
-    midpoint_wire = midpoint * 1_000_000 if profile.midpoint_in_microseconds else midpoint
-    radius_wire = server.radius * 1_000_000 if profile.midpoint_in_microseconds else server.radius
-
-    srep = SignedResponse(
-        radius=radius_wire,
-        midpoint=midpoint_wire,
-        root=root,
-        version=profile.version,
-        versions=server.versions,
-    )
-    srep_raw = srep.to_bytes()
-    sig = server.delegated_key.sign(profile.response_context + srep_raw)
-    cert = pick_cert(certificates=server.certificates, profile=profile)
+    signed_responses: dict[ProtocolProfile, tuple[SignedResponse, bytes, Certificate]] = {}
 
     for merkle_idx, (req_id, req, req_profile) in enumerate(group):
+        if req_profile not in signed_responses:
+            midpoint_wire = (
+                midpoint * 1_000_000 if req_profile.midpoint_in_microseconds else midpoint
+            )
+            radius_wire = (
+                server.radius * 1_000_000 if req_profile.midpoint_in_microseconds else server.radius
+            )
+            srep = SignedResponse(
+                radius=radius_wire,
+                midpoint=midpoint_wire,
+                root=root,
+                version=req_profile.version,
+                versions=server.versions,
+            )
+            sig = server.delegated_key.sign(req_profile.response_context + srep.to_bytes())
+            cert = pick_cert(certificates=server.certificates, profile=req_profile)
+            signed_responses[req_profile] = (srep, sig, cert)
+
+        srep, sig, cert = signed_responses[req_profile]
         path = get_merkle_path(levels, merkle_idx)
         response = Response(
             signature=sig,
