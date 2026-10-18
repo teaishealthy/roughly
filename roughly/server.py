@@ -34,7 +34,7 @@ from roughly.shared import (
     DRAFT_VERSION_ZERO,
     GOOGLE_ROUGHTIME_SENTINEL,
     PACKET_SIZE,
-    RESPONSE_CONTEXT_STRING,
+    RFC_DELEGATION_CONTEXT_STRING,
     ProfileKey,
     ProtocolProfile,
     build_supported_versions,
@@ -95,7 +95,7 @@ def grease_change_version(server: Server, profile: ProtocolProfile, message: Mes
     srep.version = candidate
 
     new_srep_raw = srep.to_bytes()
-    new_sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + new_srep_raw)
+    new_sig = server.delegated_key.sign(profile.response_context + new_srep_raw)
 
     sig_tag = pop_by_tag(message.tags, tags.SIG)
     sig_tag.value = new_sig
@@ -249,6 +249,7 @@ class Server(NamedTuple):
 
         certificates = CertificateStore(
             certs={
+                RFC_DELEGATION_CONTEXT_STRING: make_cert(RFC_DELEGATION_CONTEXT_STRING),
                 DELEGATION_CONTEXT_STRING: make_cert(DELEGATION_CONTEXT_STRING),
                 DELEGATION_CONTEXT_STRING_OLD: make_cert(DELEGATION_CONTEXT_STRING_OLD),
             },
@@ -421,7 +422,7 @@ def make_response(
     cert: Certificate,
 ) -> Message:
     srep_raw = srep.to_bytes()
-    sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
+    sig = server.delegated_key.sign(profile.response_context + srep_raw)
 
     response = Response(
         signature=sig,
@@ -523,7 +524,7 @@ def _process_group(
         versions=server.versions,
     )
     srep_raw = srep.to_bytes()
-    sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
+    sig = server.delegated_key.sign(profile.response_context + srep_raw)
     cert = pick_cert(certificates=server.certificates, profile=profile)
 
     for merkle_idx, (req_id, req, req_profile) in enumerate(group):

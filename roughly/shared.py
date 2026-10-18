@@ -29,6 +29,10 @@ ROUGHTIM = 0x4D49544847554F52
 RESPONSE_CONTEXT_STRING = b"RoughTime v1 response signature\x00"
 DELEGATION_CONTEXT_STRING = b"RoughTime v1 delegation signature\x00"
 DELEGATION_CONTEXT_STRING_OLD = b"RoughTime v1 delegation signature--\x00"
+RFC_RESPONSE_CONTEXT_STRING = b"Roughtime v1 response signature\x00"
+RFC_DELEGATION_CONTEXT_STRING = b"Roughtime v1 delegation signature\x00"
+
+RFC_VERSION = 1
 
 DRAFT_VERSION_ZERO = 0x80000000
 LATEST_WIRE_VERSION = DRAFT_VERSION_ZERO | 12
@@ -82,13 +86,15 @@ class ProtocolProfile:
     version: int
     hasher: Callable[[bytes], bytes]
     leaf_from_request: bool
-    """True (draft >=12): Merkle leaf input is the full request packet; False: nonce only."""
+    """True for RFC 10049 and draft >=12: hash the full request packet, not just the nonce."""
+    response_context: bytes
+    """Context used to sign and verify SREP, including the terminating zero byte."""
     delegation_context: bytes
     nonce_size: int
     packet_framing: bool
-    """True for all draft versions; False for Google (raw message, no magic/len header)."""
+    """True for RFC 10049 and drafts; False for Google (no magic/len header)."""
     type_tag_required: bool
-    """True for draft >=14: TYPE tag must be present in incoming requests."""
+    """True for RFC 10049 and draft >=14: TYPE is mandatory in requests and responses."""
     ver_tag_in_response: bool
     """True for draft <=11: include VER tag in outgoing responses."""
     midpoint_in_microseconds: bool
@@ -99,7 +105,7 @@ class ProtocolProfile:
     """True for Google: MINT/MAXT in the delegation certificate are in microseconds."""
 
     sorted_versions: bool
-    """True for draft >=12: listed versions must be sorted in ascending order"""
+    """True for RFC 10049 and draft >=12: listed versions must be sorted ascending."""
 
     @property
     def key(self) -> ProfileKey:
@@ -109,14 +115,29 @@ class ProtocolProfile:
     @functools.cache
     def from_version(version: int) -> ProtocolProfile:
         """Return the ProtocolProfile for a given Roughtime version."""
-        if version == 1:
-            version = LATEST_WIRE_VERSION
+        if version == RFC_VERSION:
+            return ProtocolProfile(
+                version=version,
+                hasher=partial_sha512,
+                leaf_from_request=True,
+                response_context=RFC_RESPONSE_CONTEXT_STRING,
+                delegation_context=RFC_DELEGATION_CONTEXT_STRING,
+                nonce_size=32,
+                packet_framing=True,
+                type_tag_required=True,
+                ver_tag_in_response=False,
+                midpoint_in_microseconds=False,
+                use_mjd=False,
+                cert_times_in_microseconds=False,
+                sorted_versions=True,
+            )
 
         if version == GOOGLE_ROUGHTIME_SENTINEL:
             return ProtocolProfile(
                 version=version,
                 hasher=sha512,
                 leaf_from_request=False,
+                response_context=RESPONSE_CONTEXT_STRING,
                 delegation_context=DELEGATION_CONTEXT_STRING_OLD,
                 nonce_size=64,
                 packet_framing=False,
@@ -133,6 +154,7 @@ class ProtocolProfile:
                 version=version,
                 hasher=sha512_256,
                 leaf_from_request=False,
+                response_context=RESPONSE_CONTEXT_STRING,
                 delegation_context=DELEGATION_CONTEXT_STRING,
                 nonce_size=64,
                 packet_framing=True,
@@ -149,6 +171,7 @@ class ProtocolProfile:
                 version=version,
                 hasher=partial_sha512,
                 leaf_from_request=False,
+                response_context=RESPONSE_CONTEXT_STRING,
                 delegation_context=DELEGATION_CONTEXT_STRING_OLD,
                 nonce_size=32,
                 packet_framing=True,
@@ -165,6 +188,7 @@ class ProtocolProfile:
             version=version,
             hasher=partial_sha512,
             leaf_from_request=True,
+            response_context=RESPONSE_CONTEXT_STRING,
             delegation_context=DELEGATION_CONTEXT_STRING,
             nonce_size=32,
             packet_framing=True,
@@ -182,7 +206,7 @@ def build_supported_versions(start: int, end: int) -> tuple[int, ...]:
     return tuple(sorted(DRAFT_VERSION_ZERO | v for v in range(start, end + 1)))
 
 
-VERSIONS_SUPPORTED = (1, *build_supported_versions(7, 15))
+VERSIONS_SUPPORTED = (RFC_VERSION, *build_supported_versions(7, 15))
 
 
 def unpack_uint32(data: bytes, *, what: str) -> int:

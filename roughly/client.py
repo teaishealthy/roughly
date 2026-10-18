@@ -22,7 +22,6 @@ from roughly.models import (
 from roughly.shared import (
     GOOGLE_ROUGHTIME_SENTINEL,
     LAST_TOP_LEVEL_VER_VERSION,
-    RESPONSE_CONTEXT_STRING,
     VERSIONS_SUPPORTED,
     ProtocolProfile,
     find_by_tag,
@@ -374,7 +373,7 @@ class VerifiableResponse(Response):
             self.certificate.delegation.public_key
         )
         try:
-            public_key.verify(self.signature, RESPONSE_CONTEXT_STRING + self.srep_raw)
+            public_key.verify(self.signature, self._profile.response_context + self.srep_raw)
         except cryptography.exceptions.InvalidSignature as e:
             raise VerificationError(
                 "Response signature invalid", reason="signature-response"
