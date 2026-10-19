@@ -35,6 +35,7 @@ from roughly.shared import (
     GOOGLE_ROUGHTIME_SENTINEL,
     PACKET_SIZE,
     RFC_DELEGATION_CONTEXT_STRING,
+    RFC_VERSION,
     ProfileKey,
     ProtocolProfile,
     build_supported_versions,
@@ -53,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_RADIUS = 3
-CLIENT_VERSIONS_SUPPORTED = build_supported_versions(10, 15)
+CLIENT_VERSIONS_SUPPORTED = (RFC_VERSION, *build_supported_versions(10, 15))
 
 CERT_VALIDITY = 60 * 60  # 1 hour
 
@@ -338,6 +339,8 @@ def select_version(client: Sequence[int], server_set: frozenset[int]) -> int | N
     if GOOGLE_ROUGHTIME_SENTINEL in client:
         return GOOGLE_ROUGHTIME_SENTINEL
     common = set(client) & server_set
+    if RFC_VERSION in common:
+        return RFC_VERSION
     return max(common) if common else None
 
 
