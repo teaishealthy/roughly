@@ -35,7 +35,6 @@ RFC_DELEGATION_CONTEXT_STRING = b"Roughtime v1 delegation signature\x00"
 RFC_VERSION = 1
 
 DRAFT_VERSION_ZERO = 0x80000000
-LATEST_WIRE_VERSION = DRAFT_VERSION_ZERO | 12
 
 # draft-12 moved VER into SREP, so a top-level VER in a response
 # can only have come from draft-11 or earlier.
