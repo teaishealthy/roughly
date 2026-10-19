@@ -13,6 +13,7 @@ import roughly.client
 import roughly.ecosystem
 import roughly.errors
 import roughly.server
+from roughly.shared import DEFAULT_PORT
 
 # ruff: noqa: FBT001, FBT002
 
@@ -60,7 +61,7 @@ async def _very_dangerously_query(
 
 @cli.command()
 @click.argument("host")
-@click.argument("port", type=int, default=2002)
+@click.argument("port", type=int, default=DEFAULT_PORT)
 @click.argument("public-key", required=False)
 @click.option("--terse", is_flag=True, help="Only output the time")
 @click.option("--timeout", type=float, default=5.0, help="Request timeout in seconds")
@@ -254,7 +255,7 @@ def server() -> None:
 @click.option(
     "--port",
     "-p",
-    default=2002,
+    default=DEFAULT_PORT,
     type=int,
     help="Port to bind to",
     envvar="ROUGHLY_PORT",

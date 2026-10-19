@@ -29,6 +29,7 @@ from roughly.models import (
     tags,
 )
 from roughly.shared import (
+    DEFAULT_PORT,
     DELEGATION_CONTEXT_STRING,
     DELEGATION_CONTEXT_STRING_OLD,
     DRAFT_VERSION_ZERO,
@@ -616,14 +617,14 @@ async def _batch_processor(handler: UDPHandler) -> None:
 async def serve(
     server: Server,
     host: str = "0.0.0.0",  # noqa: S104
-    port: int = 2002,
+    port: int = DEFAULT_PORT,
 ) -> None:
     """Start a Roughtime server.
 
     Args:
         server (Server): The server to run.
         host (str, optional): The host to bind to. Defaults to "0.0.0.0"
-        port (int, optional): The port to listen on. Defaults to 2002.
+        port (int, optional): The port to listen on. Defaults to 5319.
     """
     transport = await _start_server(lambda: UDPHandler(server), host, port)
 
