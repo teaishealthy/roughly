@@ -11,35 +11,24 @@ on:
         branches:
             - main
     workflow_dispatch:
-        inputs:
-            full_matrix:
-                description: "Run against all implementations instead of the fast subset"
-                type: boolean
-                default: false
 
 jobs:
     interop:
         runs-on: ubuntu-latest
 
         steps:
-            - name: Checkout roughly
-              uses: actions/checkout@v4
-              with:
-                  path: roughly-src
+            - parallel:
+                - name: Checkout roughly
+                  uses: actions/checkout@v4
+                  with:
+                      path: roughly-src
 
-            - name: Checkout Plummet
-              uses: actions/checkout@v4
-              with:
-                  repository: ietf-wg-ntp/Roughtime-interop-code
-                  path: plummet
-
-            - name: Init pyroughtime submodule
-              if: ${{ inputs.full_matrix != true }}
-              run: git -C plummet submodule update --init -- implementations/pyroughtime/pyroughtime
-
-            - name: Init all submodules
-              if: ${{ inputs.full_matrix == true }}
-              run: git -C plummet submodule update --init --recursive
+                - name: Checkout Plummet and submodules
+                  uses: actions/checkout@v4
+                  with:
+                      repository: ietf-wg-ntp/Roughtime-interop-code
+                      path: plummet
+                      submodules: recursive
 
             - name: Substitute current checkout into the roughly implementation
               run: |
@@ -73,66 +62,33 @@ jobs:
                   restore-keys: |
                       poetry-${{ runner.os }}-
 
-            - name: Install Plummet dependencies
-              working-directory: plummet
-              run: poetry install
+            - parallel:
+                - name: Install Plummet dependencies
+                  working-directory: plummet
+                  run: poetry install
 
-            - name: Trim implementations to the fast subset
-              if: ${{ inputs.full_matrix != true }}
-              working-directory: plummet
-              run: |
-                  poetry run python - <<'PY'
-                  import yaml
+                # buildx bake ignores the compose file's top-level `name: "plummet"` field
+                # (unlike `docker compose build`), so images must be tagged explicitly to
+                # match what Plummet's runtime compose file expects: plummet-<service>:latest.
+                - name: Build all images
+                  working-directory: plummet/implementations
+                  shell: bash
+                  run: |
+                      targets=$(docker buildx bake -f docker-compose.yml --print | jq -r '.target | keys[]')
+                      tag_args=()
+                      while IFS= read -r target; do
+                          tag_args+=(--set "${target}.tags=plummet-${target}:latest")
+                      done <<< "$targets"
 
-                  path = "implementations/implementations.yml"
-                  with open(path) as f:
-                      data = yaml.safe_load(f)
-
-                  keep = {"roughly", "pyroughtime"}
-                  for name, impl in data["implementations"].items():
-                      impl["enabled"] = name in keep
-
-                  with open(path, "w") as f:
-                      yaml.safe_dump(data, f, sort_keys=False)
-                  PY
-
-            # buildx bake ignores the compose file's top-level `name: "plummet"` field
-            # (unlike `docker compose build`), so images must be tagged explicitly to
-            # match what Plummet's runtime compose file expects: plummet-<service>:latest.
-            - name: Build fast subset images
-              if: ${{ inputs.full_matrix != true }}
-              working-directory: plummet/implementations
-              run: |
-                  docker buildx bake -f docker-compose.yml \
-                      --set "*.cache-from=type=gha" \
-                      --set "*.cache-to=type=gha,mode=max" \
-                      --set "roughly.tags=plummet-roughly:latest" \
-                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
-                      --load \
-                      roughly pyroughtime
-
-            - name: Build all images
-              if: ${{ inputs.full_matrix == true }}
-              working-directory: plummet/implementations
-              run: |
-                  docker buildx bake -f docker-compose.yml \
-                      --set "*.cache-from=type=gha" \
-                      --set "*.cache-to=type=gha,mode=max" \
-                      --set "butterfield.tags=plummet-butterfield:latest" \
-                      --set "cloudflare.tags=plummet-cloudflare:latest" \
-                      --set "craggy.tags=plummet-craggy:latest" \
-                      --set "node-roughtime.tags=plummet-node-roughtime:latest" \
-                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
-                      --set "roughenough.tags=plummet-roughenough:latest" \
-                      --set "roughtimed.tags=plummet-roughtimed:latest" \
-                      --set "roughly.tags=plummet-roughly:latest" \
-                      --set "tannerryan-roughtime.tags=plummet-tannerryan-roughtime:latest" \
-                      --set "vroughtime.tags=plummet-vroughtime:latest" \
-                      --load
+                      docker buildx bake -f docker-compose.yml \
+                          --set "*.cache-from=type=gha" \
+                          --set "*.cache-to=type=gha,mode=max" \
+                          "${tag_args[@]}" \
+                          --load
 
             - name: Run Plummet
               working-directory: plummet
-              run: poetry run plummet --container docker --workers 2 --timeout 15
+              run: poetry run plummet --container docker --workers 4 --timeout 15 --focus roughly
 
             - name: Summarize results
               if: always()
