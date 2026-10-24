@@ -11,11 +11,6 @@ on:
         branches:
             - main
     workflow_dispatch:
-        inputs:
-            full_matrix:
-                description: "Run against all implementations instead of the fast subset"
-                type: boolean
-                default: false
 
 jobs:
     interop:
@@ -33,12 +28,7 @@ jobs:
                   repository: ietf-wg-ntp/Roughtime-interop-code
                   path: plummet
 
-            - name: Init pyroughtime submodule
-              if: ${{ inputs.full_matrix != true }}
-              run: git -C plummet submodule update --init -- implementations/pyroughtime/pyroughtime
-
             - name: Init all submodules
-              if: ${{ inputs.full_matrix == true }}
               run: git -C plummet submodule update --init --recursive
 
             - name: Substitute current checkout into the roughly implementation
@@ -77,42 +67,10 @@ jobs:
               working-directory: plummet
               run: poetry install
 
-            - name: Trim implementations to the fast subset
-              if: ${{ inputs.full_matrix != true }}
-              working-directory: plummet
-              run: |
-                  poetry run python - <<'PY'
-                  import yaml
-
-                  path = "implementations/implementations.yml"
-                  with open(path) as f:
-                      data = yaml.safe_load(f)
-
-                  keep = {"roughly", "pyroughtime"}
-                  for name, impl in data["implementations"].items():
-                      impl["enabled"] = name in keep
-
-                  with open(path, "w") as f:
-                      yaml.safe_dump(data, f, sort_keys=False)
-                  PY
-
             # buildx bake ignores the compose file's top-level `name: "plummet"` field
             # (unlike `docker compose build`), so images must be tagged explicitly to
             # match what Plummet's runtime compose file expects: plummet-<service>:latest.
-            - name: Build fast subset images
-              if: ${{ inputs.full_matrix != true }}
-              working-directory: plummet/implementations
-              run: |
-                  docker buildx bake -f docker-compose.yml \
-                      --set "*.cache-from=type=gha" \
-                      --set "*.cache-to=type=gha,mode=max" \
-                      --set "roughly.tags=plummet-roughly:latest" \
-                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
-                      --load \
-                      roughly pyroughtime
-
             - name: Build all images
-              if: ${{ inputs.full_matrix == true }}
               working-directory: plummet/implementations
               run: |
                   docker buildx bake -f docker-compose.yml \
@@ -132,7 +90,7 @@ jobs:
 
             - name: Run Plummet
               working-directory: plummet
-              run: poetry run plummet --container docker --workers 2 --timeout 15
+              run: poetry run plummet --container docker --workers 4 --timeout 15 --focus roughly
 
             - name: Summarize results
               if: always()
