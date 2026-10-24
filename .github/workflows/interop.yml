@@ -17,19 +17,18 @@ jobs:
         runs-on: ubuntu-latest
 
         steps:
-            - name: Checkout roughly
-              uses: actions/checkout@v4
-              with:
-                  path: roughly-src
+            - parallel:
+                - name: Checkout roughly
+                  uses: actions/checkout@v4
+                  with:
+                      path: roughly-src
 
-            - name: Checkout Plummet
-              uses: actions/checkout@v4
-              with:
-                  repository: ietf-wg-ntp/Roughtime-interop-code
-                  path: plummet
-
-            - name: Init all submodules
-              run: git -C plummet submodule update --init --recursive
+                - name: Checkout Plummet and submodules
+                  uses: actions/checkout@v4
+                  with:
+                      repository: ietf-wg-ntp/Roughtime-interop-code
+                      path: plummet
+                      submodules: recursive
 
             - name: Substitute current checkout into the roughly implementation
               run: |
@@ -63,30 +62,29 @@ jobs:
                   restore-keys: |
                       poetry-${{ runner.os }}-
 
-            - name: Install Plummet dependencies
-              working-directory: plummet
-              run: poetry install
+            - parallel:
+                - name: Install Plummet dependencies
+                  working-directory: plummet
+                  run: poetry install
 
-            # buildx bake ignores the compose file's top-level `name: "plummet"` field
-            # (unlike `docker compose build`), so images must be tagged explicitly to
-            # match what Plummet's runtime compose file expects: plummet-<service>:latest.
-            - name: Build all images
-              working-directory: plummet/implementations
-              run: |
-                  docker buildx bake -f docker-compose.yml \
-                      --set "*.cache-from=type=gha" \
-                      --set "*.cache-to=type=gha,mode=max" \
-                      --set "butterfield.tags=plummet-butterfield:latest" \
-                      --set "cloudflare.tags=plummet-cloudflare:latest" \
-                      --set "craggy.tags=plummet-craggy:latest" \
-                      --set "node-roughtime.tags=plummet-node-roughtime:latest" \
-                      --set "pyroughtime.tags=plummet-pyroughtime:latest" \
-                      --set "roughenough.tags=plummet-roughenough:latest" \
-                      --set "roughtimed.tags=plummet-roughtimed:latest" \
-                      --set "roughly.tags=plummet-roughly:latest" \
-                      --set "tannerryan-roughtime.tags=plummet-tannerryan-roughtime:latest" \
-                      --set "vroughtime.tags=plummet-vroughtime:latest" \
-                      --load
+                # buildx bake ignores the compose file's top-level `name: "plummet"` field
+                # (unlike `docker compose build`), so images must be tagged explicitly to
+                # match what Plummet's runtime compose file expects: plummet-<service>:latest.
+                - name: Build all images
+                  working-directory: plummet/implementations
+                  shell: bash
+                  run: |
+                      targets=$(docker buildx bake -f docker-compose.yml --print | jq -r '.target | keys[]')
+                      tag_args=()
+                      while IFS= read -r target; do
+                          tag_args+=(--set "${target}.tags=plummet-${target}:latest")
+                      done <<< "$targets"
+
+                      docker buildx bake -f docker-compose.yml \
+                          --set "*.cache-from=type=gha" \
+                          --set "*.cache-to=type=gha,mode=max" \
+                          "${tag_args[@]}" \
+                          --load
 
             - name: Run Plummet
               working-directory: plummet
