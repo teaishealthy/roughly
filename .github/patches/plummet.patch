@@ -1,0 +1,8 @@
+diff --git a/implementations/roughly/run.sh b/implementations/roughly/run.sh
+--- a/implementations/roughly/run.sh
++++ b/implementations/roughly/run.sh
+@@ -8,3 +8,3 @@
+ elif [[ "$MODE" == "server" ]]; then
+-    ROUGHLY_PRIVATE_KEY=BuXi3Chpe7Nj3gCXavLUIoGbxngyrWVa3pYIHswbzbU= roughly -v server run &> /data/server.log
++    ROUGHLY_PRIVATE_KEY=BuXi3Chpe7Nj3gCXavLUIoGbxngyrWVa3pYIHswbzbU= roughly -v server run --port 2002 &> /data/server.log
+ 	exit 1;
