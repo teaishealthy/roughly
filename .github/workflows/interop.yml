@@ -35,6 +35,10 @@ jobs:
                   mkdir -p plummet/implementations/roughly/roughly
                   rsync -a --delete --exclude='.git' roughly-src/ plummet/implementations/roughly/roughly/
 
+            - name: Apply Plummet patch
+              working-directory: plummet
+              run: git apply ../roughly-src/.github/patches/plummet.patch
+
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v3
 

@@ -38,13 +38,13 @@
     },
     {
       "name": "time.txryan.com",
-      "version": 2147483659,
+      "version": 1,
       "publicKeyType": "ed25519",
       "publicKey": "iBVjxg/1j7y1+kQUTBYdTabxCppesU/07D4PMDJk2WA=",
       "addresses": [
         {
           "protocol": "udp",
-          "address": "time.txryan.com:2002"
+          "address": "time.txryan.com:5319"
         }
       ]
     },
@@ -110,7 +110,7 @@
     },
     {
       "name": "TimeNL-Roughtime",
-      "version": "1",
+      "version": 2147483660,
       "publicKeyType": "ed25519",
       "publicKey": "v2CievhgKsxzlWPwIkYFUXeA51Akhkv5uhJCj1/kbiY=",
       "addresses": [
@@ -122,7 +122,7 @@
     },
     {
       "name": "roughtime.sturdystatistics.com",
-      "version": "1",
+      "version": 2147483660,
       "publicKeyType": "ed25519",
       "publicKey": "NqIjwLopQn6yQChtE21Mb97dAbAPe5UOuTa0tOakgD8=",
       "addresses": [

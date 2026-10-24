@@ -3,14 +3,14 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/teaishealthy/teaishealthy/refs/heads/main/ruff-badge.json&style=flat-square)](https://github.com/astral-sh/ruff)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/teaishealthy/roughly/tests.yml?style=flat-square&label=tests)
 ![Coveralls](https://img.shields.io/coverallsCoverage/github/teaishealthy/roughly?style=flat-square)
-[![Roughtime draft 07-19](https://img.shields.io/badge/draft%2007--19-f2d3ff?style=flat-square)](https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19)
+[![RFC 10049](https://img.shields.io/badge/RFC-10049-f2d3ff?style=flat-square)](https://www.rfc-editor.org/rfc/rfc10049)
 
-An asynchronous implemenation of the Roughtime protocol for Python.
+An asynchronous implementation of the Roughtime protocol for Python.
 
-Implements the Roughtime protocol as described in https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19.
+Implements the experimental Roughtime protocol specified in [RFC 10049](https://www.rfc-editor.org/rfc/rfc10049).
 
-Draft versions 07 through 19 are supported for querying servers.\
-Draft versions 10 through 19 are supported for running a server. Also supports queries from Google Roughtime clients.
+The client and server support Roughtime version 1, with the server preferring it when offered by a client.\
+Drafts 07 through 19 remain supported for querying servers, and drafts 10 through 19 for running a server. The server also supports queries from Google Roughtime clients.
 
 
 ## Quickstart
@@ -42,6 +42,8 @@ Then you can query a Roughtime server like so:
 roughly query time.teax.dev 2002 84pMADvKUcSOq5RNbVRjVrjiU16Dxo2XV2Qkm+4DRTg=
 ```
 
+The default Roughtime port is 5319. This example explicitly uses the server's configured port, 2002.
+
 Or run ecosystem queries (assuming you have an `ecosystem.json` file):
 
 ```bash
@@ -66,7 +68,7 @@ You can then run the server like so:
 ROUGHLY_PRIVATE_KEY="your_private_key_here" roughly -v server run
 ```
 
-By default, the server will bind to `0.0.0.0:2002`. You can change this using the `--host` and `--port` flags.
+By default, the server will bind to `0.0.0.0:5319`. You can change this using the `--host` and `--port` flags.
 I recommend running the server with verbose logging enabled (`-v`), so you can see incoming requests and debug any issues.
 Additionally you might want to consider turning off response greasing while testing using the `--no-grease` flag.
 
@@ -193,7 +195,7 @@ The interopability matrix of `roughly` against Roughtime servers looks like this
 
 ### draft-7
 
-Support for draft-7 is limited, in the sense that `roughly` will fit responses from draft-7 servers into the draft-15 data structures.
+Support for draft-7 is limited, in the sense that `roughly` fits responses from draft-7 servers into its current response data structures.
 This means that some fields that are not present in draft-8+ (such as DUT1, DTAI, and LEAP) will be missing.
 Additionally draft-7 offered for the precision of radius to be in microseconds, while draft-8+ uses seconds, this precision will be lost when querying draft-7 servers, and be clamped to a minimum of one second.
 

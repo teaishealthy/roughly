@@ -62,6 +62,48 @@ def test_multiple_requests_same_group() -> None:
     assert len(roots) == 1, "All same-group requests must share a single Merkle root"
     assert len(set(indices)) == 4, "Each request must have a distinct Merkle index"
 
+
+@pytest.mark.parametrize(
+    "versions",
+    [
+        (DRAFT_VERSION_ZERO | 10, DRAFT_VERSION_ZERO | 11),
+        (DRAFT_VERSION_ZERO | 11, DRAFT_VERSION_ZERO | 10),
+        (DRAFT_VERSION_ZERO | 12, DRAFT_VERSION_ZERO | 15),
+        (DRAFT_VERSION_ZERO | 15, DRAFT_VERSION_ZERO | 12),
+        (1, DRAFT_VERSION_ZERO | 12),
+        (DRAFT_VERSION_ZERO | 12, 1),
+    ],
+)
+def test_different_versions_same_group(versions: tuple[int, int]) -> None:
+    """Different selected versions share a Merkle tree and produce verifiable responses."""
+    server = roughly.server.Server.create(
+        private_key=PRIVATE_KEY.private_bytes_raw(), versions=tuple(sorted(versions))
+    )
+    profiles = [ProtocolProfile.from_version(version) for version in versions]
+    assert profiles[0].key == profiles[1].key
+    request_versions = versions * 2
+    raws = [make_request((version,)) for version in request_versions]
+
+    responses = roughly.server.handle_batch(server, raws)
+    assert len(responses) == len(raws)
+
+    roots: set[bytes] = set()
+    indices: set[int] = set()
+    signatures: dict[int, set[bytes]] = {}
+    for version, raw, response in zip(request_versions, raws, responses, strict=True):
+        assert response is not None
+        resp = roughly.client.VerifiableResponse.from_packet(raw=response, request=raw)
+        resp.verify(PUBLIC_KEY_BYTES)
+        assert resp.version == version
+        roots.add(resp.signed_response.root)
+        indices.add(resp.index)
+        signatures.setdefault(version, set()).add(resp.signature)
+
+    assert len(roots) == 1
+    assert len(indices) == len(raws)
+    assert all(len(values) == 1 for values in signatures.values())
+
+
 def test_cross_group_batching() -> None:
     """Requests from incompatible groups each get their own SREP and verify correctly."""
     server = make_server()

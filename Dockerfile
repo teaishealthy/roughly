@@ -32,6 +32,6 @@ WORKDIR /app
 ENV PYTHONPATH=/app/deps
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 2002/udp
+EXPOSE 5319/udp
 
 CMD ["-m", "roughly.cli", "-v", "server", "run"]

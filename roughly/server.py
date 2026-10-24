@@ -29,12 +29,14 @@ from roughly.models import (
     tags,
 )
 from roughly.shared import (
+    DEFAULT_PORT,
     DELEGATION_CONTEXT_STRING,
     DELEGATION_CONTEXT_STRING_OLD,
     DRAFT_VERSION_ZERO,
     GOOGLE_ROUGHTIME_SENTINEL,
     PACKET_SIZE,
-    RESPONSE_CONTEXT_STRING,
+    RFC_DELEGATION_CONTEXT_STRING,
+    RFC_VERSION,
     ProfileKey,
     ProtocolProfile,
     build_supported_versions,
@@ -53,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_RADIUS = 3
-CLIENT_VERSIONS_SUPPORTED = build_supported_versions(10, 15)
+CLIENT_VERSIONS_SUPPORTED = (RFC_VERSION, *build_supported_versions(10, 15))
 
 CERT_VALIDITY = 60 * 60  # 1 hour
 
@@ -95,7 +97,7 @@ def grease_change_version(server: Server, profile: ProtocolProfile, message: Mes
     srep.version = candidate
 
     new_srep_raw = srep.to_bytes()
-    new_sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + new_srep_raw)
+    new_sig = server.delegated_key.sign(profile.response_context + new_srep_raw)
 
     sig_tag = pop_by_tag(message.tags, tags.SIG)
     sig_tag.value = new_sig
@@ -249,6 +251,7 @@ class Server(NamedTuple):
 
         certificates = CertificateStore(
             certs={
+                RFC_DELEGATION_CONTEXT_STRING: make_cert(RFC_DELEGATION_CONTEXT_STRING),
                 DELEGATION_CONTEXT_STRING: make_cert(DELEGATION_CONTEXT_STRING),
                 DELEGATION_CONTEXT_STRING_OLD: make_cert(DELEGATION_CONTEXT_STRING_OLD),
             },
@@ -337,6 +340,8 @@ def select_version(client: Sequence[int], server_set: frozenset[int]) -> int | N
     if GOOGLE_ROUGHTIME_SENTINEL in client:
         return GOOGLE_ROUGHTIME_SENTINEL
     common = set(client) & server_set
+    if RFC_VERSION in common:
+        return RFC_VERSION
     return max(common) if common else None
 
 
@@ -421,7 +426,7 @@ def make_response(
     cert: Certificate,
 ) -> Message:
     srep_raw = srep.to_bytes()
-    sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
+    sig = server.delegated_key.sign(profile.response_context + srep_raw)
 
     response = Response(
         signature=sig,
@@ -512,21 +517,28 @@ def _process_group(
     requests_only = [req for _, req, _ in group]
     root, levels = build_merkle_tree(profile, requests_only)
 
-    midpoint_wire = midpoint * 1_000_000 if profile.midpoint_in_microseconds else midpoint
-    radius_wire = server.radius * 1_000_000 if profile.midpoint_in_microseconds else server.radius
-
-    srep = SignedResponse(
-        radius=radius_wire,
-        midpoint=midpoint_wire,
-        root=root,
-        version=profile.version,
-        versions=server.versions,
-    )
-    srep_raw = srep.to_bytes()
-    sig = server.delegated_key.sign(RESPONSE_CONTEXT_STRING + srep_raw)
-    cert = pick_cert(certificates=server.certificates, profile=profile)
+    signed_responses: dict[ProtocolProfile, tuple[SignedResponse, bytes, Certificate]] = {}
 
     for merkle_idx, (req_id, req, req_profile) in enumerate(group):
+        if req_profile not in signed_responses:
+            midpoint_wire = (
+                midpoint * 1_000_000 if req_profile.midpoint_in_microseconds else midpoint
+            )
+            radius_wire = (
+                server.radius * 1_000_000 if req_profile.midpoint_in_microseconds else server.radius
+            )
+            srep = SignedResponse(
+                radius=radius_wire,
+                midpoint=midpoint_wire,
+                root=root,
+                version=req_profile.version,
+                versions=server.versions,
+            )
+            sig = server.delegated_key.sign(req_profile.response_context + srep.to_bytes())
+            cert = pick_cert(certificates=server.certificates, profile=req_profile)
+            signed_responses[req_profile] = (srep, sig, cert)
+
+        srep, sig, cert = signed_responses[req_profile]
         path = get_merkle_path(levels, merkle_idx)
         response = Response(
             signature=sig,
@@ -605,14 +617,14 @@ async def _batch_processor(handler: UDPHandler) -> None:
 async def serve(
     server: Server,
     host: str = "0.0.0.0",  # noqa: S104
-    port: int = 2002,
+    port: int = DEFAULT_PORT,
 ) -> None:
     """Start a Roughtime server.
 
     Args:
         server (Server): The server to run.
         host (str, optional): The host to bind to. Defaults to "0.0.0.0"
-        port (int, optional): The port to listen on. Defaults to 2002.
+        port (int, optional): The port to listen on. Defaults to 5319.
     """
     transport = await _start_server(lambda: UDPHandler(server), host, port)
 
